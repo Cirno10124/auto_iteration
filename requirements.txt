@@ -1,0 +1,17 @@
+# Python version: 3.11.13
+# 项目依赖（固定版本以匹配 lora_env.txt）
+torch==2.8.0
+transformers==4.56.1
+datasets==4.0.0
+accelerate==1.10.1
+peft==0.5.0
+numpy==2.3.3
+scipy==1.16.2
+sounddevice==0.4.0
+soundfile==0.13.1
+webrtcvad==2.0.10
+jiwer==4.0.0
+evaluate==0.4.5
+tqdm==4.67.1
+# 添加说话人分离依赖
+pyannote.audio==2.1.1
