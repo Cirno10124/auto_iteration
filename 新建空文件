@@ -1,0 +1,3 @@
+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
+
+git clone https://huggingface.co/pyannote/speaker-diarization ~/.cache/huggingface/hub/pyannote/speaker-diarization
