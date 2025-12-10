@@ -8,7 +8,7 @@ peft==0.5.0
 numpy==2.3.3
 scipy==1.16.2
 sounddevice==0.4.0
-soundfile==0.13.1
+soundfile>=0.10.2,<0.11  # 修改为兼容 pyannote.audio 的依赖
 webrtcvad==2.0.10
 jiwer==4.0.0
 evaluate==0.4.5
