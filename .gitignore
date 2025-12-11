@@ -12,3 +12,6 @@ __pycache__/
 *.pyzwzwz
 *.pyzwzwzw
 *.pyzwzwzwz
+.gitignore
+*.wav
+*mp4

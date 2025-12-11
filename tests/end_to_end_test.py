@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import unittest
+import shutil
 
 
 class EndToEndTest(unittest.TestCase):
@@ -15,19 +16,35 @@ class EndToEndTest(unittest.TestCase):
         # 调用 orchestrator.py，使用配置文件并仅执行一次
         cmd = [
             sys.executable,
-            os.path.join("auto_iteration", "orchestrator.py"),
+            os.path.join("orchestrator.py"),
             "--config",
-            os.path.join(
-                "auto_iteration", "orchestrator_config_example.json"
-            ),
+            os.path.join("orchestrator_config_example.json"),
             "--override",
             "paths.raw_audio_dir=tests/test_audio",
+            "paths.audio_dir=tests/audio_chunks",
+            "paths.labels_dir=tests/labels",
+            "paths.manifest_dir=tests/manifests",
+            "paths.model_dir=tests/model",
+            "paths.ggml_dir=tests/ggml_model",
+            "logging.log_dir=tests/logs",
             "iteration.once=true",
+            "iteration.skip_manifest=true",
+            "iteration.stop_after_labels=true",
         ]
         result = subprocess.run(cmd)
         self.assertEqual(
             result.returncode, 0, f"管道执行失败，返回码: {result.returncode}"
         )
+        # 清理测试生成的目录
+        for d in [
+            "tests/audio_chunks",
+            "tests/labels",
+            "tests/manifests",
+            "tests/model",
+            "tests/ggml_model",
+            "tests/logs",
+        ]:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

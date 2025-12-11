@@ -131,11 +131,23 @@ def main():
         random.seed(args.seed)
         random.shuffle(pairs)
         total = len(pairs)
-        train_end = int(total * args.train_ratio)
-        test_end = train_end + int(total * args.test_ratio)
-        train_pairs = pairs[:train_end]
-        val_pairs = pairs[train_end:test_end]
-        test_pairs = pairs[test_end:]
+        # 计算各数据集大小，确保验证集和测试集至少包含1条
+        train_size = int(total * args.train_ratio)
+        test_size = int(total * args.test_ratio)
+        val_size = total - train_size - test_size
+        # 强制至少1条给验证集和测试集
+        if val_size < 1:
+            val_size = 1
+        if test_size < 1:
+            test_size = 1
+        # 重新计算训练集大小保证总和
+        train_size = total - val_size - test_size
+        if train_size < 0:
+            train_size = 0
+        # 划分数据
+        train_pairs = pairs[:train_size]
+        val_pairs = pairs[train_size:train_size + val_size]
+        test_pairs = pairs[train_size + val_size:]
 
         # 将 (audio_path, label_path) 转换为 (audio_path, text)
         def load_text_from_pairs(pair_list):

@@ -8,8 +8,9 @@ import subprocess
 import sys
 import time
 import traceback
+import shutil
 
-from auto_iteration.logging_utils import setup_logging  # 公共日志模块
+from logging_utils import setup_logging  # 公共日志模块
 
 # 全局日志对象
 logger = None
@@ -68,6 +69,9 @@ def load_config(config_path, logger=None):
                             # 跨行块注释，需要特殊处理
                             i += 2
                             continue
+                    # 非注释且不在字符串中，正常保留字符并前进
+                    cleaned_line += char
+                    i += 1
                 else:
                     cleaned_line += char
                     i += 1
@@ -238,7 +242,10 @@ if __name__ == "__main__":
 
     # 初始化日志系统
     log_config = config.get("logging", {})
+    # 将日志路径解析为相对于脚本所在目录的绝对路径
     log_dir = log_config.get("log_dir", "logs")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.join(script_dir, log_dir)
     log_level = log_config.get("log_level", "INFO")
     log_file_prefix = log_config.get("log_file_prefix", "orchestrator")
     logger = setup_logging(log_dir, log_level, log_file_prefix)
@@ -341,6 +348,10 @@ if __name__ == "__main__":
 
             # 1. 自动标注：始终调用，让 labeler.py 自行跳过已标注文件
             # 支持使用微调后的模型进行标注（自迭代功能）
+            max_samples = labeling.get("max_samples", 100)
+            temperature = labeling.get("temperature", 1.0)
+            # 支持指定设备，-1 表示 CPU，>=0 表示 GPU 设备编号
+            device = labeling.get("device", -1)
             labeling_model = labeling.get(
                 "model_name_or_path", "openai/whisper-large-v3-turbo"
             )
@@ -362,10 +373,16 @@ if __name__ == "__main__":
                     labels_dir,
                     "--model_name_or_path",
                     labeling_model,
+                    "--device",
+                    str(device),
                     "--compression_ratio_threshold",
                     compression_ratio_threshold,
                     "--logprob_threshold",
                     logprob_threshold,
+                    "--max_samples",
+                    str(max_samples),
+                    "--temperature",
+                    str(temperature),
                 ],
                 logger,
             )
@@ -388,6 +405,24 @@ if __name__ == "__main__":
                     ],
                     logger,
                 )
+                # 检查清单文件记录数
+                train_csv = os.path.join(manifest_dir, "train.csv")
+                val_csv = os.path.join(manifest_dir, "val.csv")
+                test_csv = os.path.join(manifest_dir, "test.csv")
+                def count_records(csv_path):
+                    try:
+                        with open(csv_path, 'r', encoding='utf-8') as f:
+                            lines = f.read().splitlines()
+                        return max(0, len(lines) - 1)
+                    except Exception:
+                        return 0
+                train_count = count_records(train_csv)
+                val_count = count_records(val_csv)
+                test_count = count_records(test_csv)
+                logger.info(f"清单写入数量: train={train_count}, val={val_count}, test={test_count}")
+                if train_count == 0 and val_count == 0 and test_count == 0:
+                    logger.error("清单为空，标签生成或数据管理未产生任何数据，终止流程。")
+                    sys.exit(1)
 
             # 抽取部分标签用于人工标注
             if annotation_ratio > 0:
@@ -653,6 +688,12 @@ if __name__ == "__main__":
             logger.info("等待下次周期继续...")
 
         if once:
+            # 在 once 模式下，删除训练模型输出目录
+            try:
+                shutil.rmtree(model_dir)
+                logger.info(f"已移除模型输出目录: {model_dir}")
+            except Exception as e:
+                logger.warning(f"移除模型目录失败: {e}")
             logger.info("已启用 once 模式，执行一次后退出")
             break
 
