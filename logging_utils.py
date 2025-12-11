@@ -3,10 +3,11 @@ import os
 import sys
 from datetime import datetime
 
-def setup_logging(log_dir='logs', log_level='INFO', log_file_prefix=None):
+
+def setup_logging(log_dir="logs", log_level="INFO", log_file_prefix=None):
     """初始化日志系统，返回 logger 对象"""
     os.makedirs(log_dir, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if log_file_prefix:
         filename = f"{log_file_prefix}_{timestamp}.log"
     else:
@@ -19,15 +20,19 @@ def setup_logging(log_dir='logs', log_level='INFO', log_file_prefix=None):
     logger.handlers.clear()
 
     # 文件处理器
-    file_handler = logging.FileHandler(log_path, encoding='utf-8')
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
-    fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', '%Y-%m-%d %H:%M:%S')
+    fmt = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 
     # 控制台处理器
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+    console_handler.setLevel(
+        getattr(logging, log_level.upper(), logging.INFO)
+    )
     console_handler.setFormatter(fmt)
     logger.addHandler(console_handler)
 

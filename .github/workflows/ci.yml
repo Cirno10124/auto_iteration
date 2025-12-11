@@ -26,7 +26,7 @@ jobs:
         pip install flake8 pytest
 
     - name: Lint
-      run: flake8 .
+      run: flake8 . --max-line-length=140 --extend-ignore=E203
 
     - name: Run tests
       run: pytest --maxfail=1 --disable-warnings -q

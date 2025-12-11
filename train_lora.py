@@ -1,40 +1,51 @@
 #!/usr/bin/env python3
 import argparse
-import os
 import json
 import logging
+import os
 import re
-from datasets import load_dataset
-import jiwer
-from transformers import WhisperProcessor, WhisperForConditionalGeneration, get_linear_schedule_with_warmup
-import torch
-from peft import LoraConfig, get_peft_model, PeftModel
-import soundfile as sf
 from dataclasses import dataclass
-from typing import List, Dict, Any
-import torch.nn as nn
+from typing import Any, Dict, List
+
+import jiwer
 import peft
-from tqdm.auto import tqdm
+import soundfile as sf
+import torch
+import torch.nn as nn
 from accelerate import Accelerator
+from datasets import load_dataset
+from peft import LoraConfig, PeftModel, get_peft_model
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
+from transformers import (
+    WhisperForConditionalGeneration,
+    WhisperProcessor,
+    get_linear_schedule_with_warmup,
+)
 
 # Monkey-patch PeftModel to drop input_ids and inputs_embeds
 _orig_peft_forward = peft.PeftModel.forward
+
+
 def _patched_peft_forward(self, *args, **kwargs):
-    kwargs.pop('input_ids', None)
-    kwargs.pop('inputs_embeds', None)
+    kwargs.pop("input_ids", None)
+    kwargs.pop("inputs_embeds", None)
     return _orig_peft_forward(self, *args, **kwargs)
+
+
 peft.PeftModel.forward = _patched_peft_forward
+
 
 def setup_logging():
     """设置日志系统"""
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     return logging.getLogger(__name__)
+
 
 # Model wrapper to drop unexpected input_ids argument
 class ModelWrapper(nn.Module):
@@ -43,139 +54,172 @@ class ModelWrapper(nn.Module):
         self.base_model = base_model
 
     def forward(self, *args, **kwargs):
-        kwargs.pop('input_ids', None)
+        kwargs.pop("input_ids", None)
         return self.base_model(*args, **kwargs)
-    
+
     def __getattr__(self, name):
         try:
             return super().__getattr__(name)
         except AttributeError:
             return getattr(self.base_model, name)
 
+
 @dataclass
 class SpeechSeq2SeqCollator:
     """Custom collator for speech-to-seq2seq models like Whisper"""
+
     processor: WhisperProcessor
     padding: Any = True
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        input_features = [f['input_features'] for f in features]
+    def __call__(
+        self, features: List[Dict[str, Any]]
+    ) -> Dict[str, torch.Tensor]:
+        input_features = [f["input_features"] for f in features]
         batch = self.processor.feature_extractor.pad(
-            {'input_features': input_features},
+            {"input_features": input_features},
             padding=self.padding,
-            return_tensors='pt',
-            return_attention_mask=True
+            return_tensors="pt",
+            return_attention_mask=True,
         )
-        labels = [f['labels'] for f in features]
+        labels = [f["labels"] for f in features]
         label_batch = self.processor.tokenizer.pad(
-            {'input_ids': labels},
+            {"input_ids": labels},
             padding=self.padding,
-            return_tensors='pt'
+            return_tensors="pt",
         )
-        label_ids = label_batch['input_ids'].masked_fill(
-            label_batch['input_ids'] == self.processor.tokenizer.pad_token_id,
-            -100
+        label_ids = label_batch["input_ids"].masked_fill(
+            label_batch["input_ids"]
+            == self.processor.tokenizer.pad_token_id,
+            -100,
         )
-        batch['labels'] = label_ids
+        batch["labels"] = label_ids
         return batch
+
 
 def prepare_dataset(batch, processor, sampling_rate=16000):
     """准备数据集，只支持 Whisper"""
-    audio_fp = batch.get('audio_filepath') or batch.get('audio_file')
-    data, sr = sf.read(audio_fp, dtype='float32')
+    audio_fp = batch.get("audio_filepath") or batch.get("audio_file")
+    data, sr = sf.read(audio_fp, dtype="float32")
     if sr != sampling_rate:
         import numpy as np
+
         data = np.interp(
             np.linspace(0, len(data), int(len(data) * sampling_rate / sr)),
-            np.arange(len(data)), data
+            np.arange(len(data)),
+            data,
         )
     processed = processor(data, sampling_rate=sampling_rate)
-    batch['input_features'] = processed.input_features[0]
-    labels = processor.tokenizer(batch['text']).input_ids
+    batch["input_features"] = processed.input_features[0]
+    labels = processor.tokenizer(batch["text"]).input_ids
     eos_id = processor.tokenizer.eos_token_id
     if labels[-1] != eos_id:
         labels.append(eos_id)
-    batch['labels'] = labels
+    batch["labels"] = labels
     return batch
 
-def save_checkpoint(model, optimizer, scheduler, epoch, step, best_metric, output_dir, accelerator, logger):
+
+def save_checkpoint(
+    model,
+    optimizer,
+    scheduler,
+    epoch,
+    step,
+    best_metric,
+    output_dir,
+    accelerator,
+    logger,
+):
     """保存检查点"""
-    checkpoint_dir = os.path.join(output_dir, 'checkpoint')
+    checkpoint_dir = os.path.join(output_dir, "checkpoint")
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
+
     # 保存模型状态
     if accelerator is not None:
         unwrapped_model = accelerator.unwrap_model(model)
     else:
         unwrapped_model = model
     unwrapped_model.save_pretrained(checkpoint_dir)
-    
+
     # 保存优化器和调度器状态（需要转换为可序列化的格式）
     # 注意：优化器和调度器的状态字典可能包含不可序列化的对象
     # 这里我们只保存必要的状态信息
     checkpoint_state = {
-        'epoch': epoch,
-        'step': step,
-        'best_metric': best_metric,
+        "epoch": epoch,
+        "step": step,
+        "best_metric": best_metric,
     }
-    checkpoint_path = os.path.join(checkpoint_dir, 'training_state.json')
-    with open(checkpoint_path, 'w') as f:
+    checkpoint_path = os.path.join(checkpoint_dir, "training_state.json")
+    with open(checkpoint_path, "w") as f:
         json.dump(checkpoint_state, f, indent=2)
-    
+
     # 保存优化器和调度器状态到单独的文件
     if accelerator is not None:
-        torch.save(optimizer.state_dict(), os.path.join(checkpoint_dir, 'optimizer.pt'))
-        torch.save(scheduler.state_dict(), os.path.join(checkpoint_dir, 'scheduler.pt'))
-    
+        torch.save(
+            optimizer.state_dict(),
+            os.path.join(checkpoint_dir, "optimizer.pt"),
+        )
+        torch.save(
+            scheduler.state_dict(),
+            os.path.join(checkpoint_dir, "scheduler.pt"),
+        )
+
     logger.info(f"检查点已保存到 {checkpoint_dir} (epoch {epoch}, step {step})")
+
 
 def load_checkpoint(output_dir, logger):
     """加载检查点"""
-    checkpoint_dir = os.path.join(output_dir, 'checkpoint')
+    checkpoint_dir = os.path.join(output_dir, "checkpoint")
     if not os.path.exists(checkpoint_dir):
         return None, None, None, 0, 0, None
-    
-    checkpoint_state_path = os.path.join(checkpoint_dir, 'training_state.json')
+
+    checkpoint_state_path = os.path.join(
+        checkpoint_dir, "training_state.json"
+    )
     if not os.path.exists(checkpoint_state_path):
         return None, None, None, 0, 0, None
-    
+
     try:
-        with open(checkpoint_state_path, 'r') as f:
+        with open(checkpoint_state_path, "r") as f:
             checkpoint_state = json.load(f)
-        
+
         # 加载优化器和调度器状态
-        opt_state_path = os.path.join(checkpoint_dir, 'optimizer.pt')
-        sched_state_path = os.path.join(checkpoint_dir, 'scheduler.pt')
+        opt_state_path = os.path.join(checkpoint_dir, "optimizer.pt")
+        sched_state_path = os.path.join(checkpoint_dir, "scheduler.pt")
         opt_state = None
         sched_state = None
         if os.path.exists(opt_state_path):
-            opt_state = torch.load(opt_state_path, map_location='cpu')
+            opt_state = torch.load(opt_state_path, map_location="cpu")
         if os.path.exists(sched_state_path):
-            sched_state = torch.load(sched_state_path, map_location='cpu')
-        
-        logger.info(f"从检查点恢复训练: epoch {checkpoint_state['epoch']}, step {checkpoint_state['step']}")
+            sched_state = torch.load(sched_state_path, map_location="cpu")
+
+        logger.info(
+            f"从检查点恢复训练: epoch {checkpoint_state['epoch']}, step {checkpoint_state['step']}"
+        )
         return (
             checkpoint_dir,
             opt_state,
             sched_state,
-            checkpoint_state['epoch'],
-            checkpoint_state['step'],
-            checkpoint_state.get('best_metric', None)
+            checkpoint_state["epoch"],
+            checkpoint_state["step"],
+            checkpoint_state.get("best_metric", None),
         )
     except Exception as e:
         logger.warning(f"加载检查点失败: {e}")
         return None, None, None, 0, 0, None
+
 
 def merge_and_save_model(peft_model, base_model_path, output_dir, logger):
     """合并 LoRA 权重到基础模型并保存"""
     try:
         logger.info("开始合并 LoRA 权重到基础模型...")
         # 加载基础模型
-        base_model = WhisperForConditionalGeneration.from_pretrained(base_model_path)
+        # _base_model = WhisperForConditionalGeneration.from_pretrained(
+        #     base_model_path
+        # )
         # 合并权重
         merged_model = peft_model.merge_and_unload()
         # 保存合并后的模型
-        merged_output_dir = os.path.join(output_dir, 'merged_model')
+        merged_output_dir = os.path.join(output_dir, "merged_model")
         os.makedirs(merged_output_dir, exist_ok=True)
         merged_model.save_pretrained(merged_output_dir)
         logger.info(f"合并后的模型已保存到 {merged_output_dir}")
@@ -184,46 +228,107 @@ def merge_and_save_model(peft_model, base_model_path, output_dir, logger):
         logger.error(f"合并模型失败: {e}")
         return None
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Whisper LoRA 微调训练脚本')
-    parser.add_argument('--train_manifest', type=str, required=True, help='训练数据 CSV/JSON 列表')
-    parser.add_argument('--eval_manifest', type=str, required=True, help='验证数据 CSV/JSON 列表')
-    parser.add_argument('--test_manifest', type=str, required=True, help='测试数据 CSV/JSON 列表')
-    parser.add_argument('--model_name_or_path', type=str, default='openai/whisper-large-v3-turbo', help='Whisper 模型路径')
-    parser.add_argument('--output_dir', type=str, default='./output', help='模型输出目录')
-    parser.add_argument('--train_batch_size', type=int, default=4)
-    parser.add_argument('--eval_batch_size', type=int, default=4)
-    parser.add_argument('--num_train_epochs', type=int, default=3)
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
-    parser.add_argument('--lora_r', type=int, default=8)
-    parser.add_argument('--lora_alpha', type=int, default=32)
-    parser.add_argument('--lora_dropout', type=float, default=0.1)
-    parser.add_argument('--eval_metric', type=str, default='cer', help='评估指标: cer 或 wer')
-    parser.add_argument('--mixed_precision', type=str, default='fp16', choices=['no','fp16','bf16'])
-    parser.add_argument('--language', type=str, default='zh', help='语言代码')
-    parser.add_argument('--task', type=str, default='transcribe', choices=['transcribe','translate'])
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=4)
-    parser.add_argument('--target_modules', type=str, default='q_proj,v_proj', help='LoRA 目标模块')
-    parser.add_argument('--max_new_tokens', type=int, default=256)
-    parser.add_argument('--no_repeat_ngram_size', type=int, default=3)
-    parser.add_argument('--repetition_penalty', type=float, default=2.0)
-    parser.add_argument('--num_beams', type=int, default=1)
-    parser.add_argument('--length_penalty', type=float, default=1.2)
-    parser.add_argument('--do_sample', action='store_true')
-    parser.add_argument('--top_k', type=int, default=50)
-    parser.add_argument('--top_p', type=float, default=0.95)
-    parser.add_argument('--gradient_checkpointing', action='store_true')
-    parser.add_argument('--warmup_steps', type=int, default=500)
-    parser.add_argument('--weight_decay', type=float, default=0.01)
-    parser.add_argument('--checkpoint_steps', type=int, default=None, help='每N步保存检查点，None表示禁用')
-    parser.add_argument('--checkpoint_epochs', type=float, default=0.25, help='每N个epoch保存检查点')
-    parser.add_argument('--early_stopping_patience', type=int, default=3, help='早停耐心值')
-    parser.add_argument('--early_stopping_threshold', type=float, default=0.001, help='早停阈值')
-    parser.add_argument('--save_merged_model', action='store_true', help='保存合并后的完整模型')
+    parser = argparse.ArgumentParser(description="Whisper LoRA 微调训练脚本")
+    parser.add_argument(
+        "--train_manifest",
+        type=str,
+        required=True,
+        help="训练数据 CSV/JSON 列表",
+    )
+    parser.add_argument(
+        "--eval_manifest",
+        type=str,
+        required=True,
+        help="验证数据 CSV/JSON 列表",
+    )
+    parser.add_argument(
+        "--test_manifest",
+        type=str,
+        required=True,
+        help="测试数据 CSV/JSON 列表",
+    )
+    parser.add_argument(
+        "--model_name_or_path",
+        type=str,
+        default="openai/whisper-large-v3-turbo",
+        help="Whisper 模型路径",
+    )
+    parser.add_argument(
+        "--output_dir", type=str, default="./output", help="模型输出目录"
+    )
+    parser.add_argument("--train_batch_size", type=int, default=4)
+    parser.add_argument("--eval_batch_size", type=int, default=4)
+    parser.add_argument("--num_train_epochs", type=int, default=3)
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--lora_r", type=int, default=8)
+    parser.add_argument("--lora_alpha", type=int, default=32)
+    parser.add_argument("--lora_dropout", type=float, default=0.1)
+    parser.add_argument(
+        "--eval_metric", type=str, default="cer", help="评估指标: cer 或 wer"
+    )
+    parser.add_argument(
+        "--mixed_precision",
+        type=str,
+        default="fp16",
+        choices=["no", "fp16", "bf16"],
+    )
+    parser.add_argument("--language", type=str, default="zh", help="语言代码")
+    parser.add_argument(
+        "--task",
+        type=str,
+        default="transcribe",
+        choices=["transcribe", "translate"],
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps", type=int, default=4
+    )
+    parser.add_argument(
+        "--target_modules",
+        type=str,
+        default="q_proj,v_proj",
+        help="LoRA 目标模块",
+    )
+    parser.add_argument("--max_new_tokens", type=int, default=256)
+    parser.add_argument("--no_repeat_ngram_size", type=int, default=3)
+    parser.add_argument("--repetition_penalty", type=float, default=2.0)
+    parser.add_argument("--num_beams", type=int, default=1)
+    parser.add_argument("--length_penalty", type=float, default=1.2)
+    parser.add_argument("--do_sample", action="store_true")
+    parser.add_argument("--top_k", type=int, default=50)
+    parser.add_argument("--top_p", type=float, default=0.95)
+    parser.add_argument("--gradient_checkpointing", action="store_true")
+    parser.add_argument("--warmup_steps", type=int, default=500)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument(
+        "--checkpoint_steps",
+        type=int,
+        default=None,
+        help="每N步保存检查点，None表示禁用",
+    )
+    parser.add_argument(
+        "--checkpoint_epochs",
+        type=float,
+        default=0.25,
+        help="每N个epoch保存检查点",
+    )
+    parser.add_argument(
+        "--early_stopping_patience", type=int, default=3, help="早停耐心值"
+    )
+    parser.add_argument(
+        "--early_stopping_threshold",
+        type=float,
+        default=0.001,
+        help="早停阈值",
+    )
+    parser.add_argument(
+        "--save_merged_model", action="store_true", help="保存合并后的完整模型"
+    )
     args = parser.parse_args()
-    
+
     logger = setup_logging()
-    
+
     logger.info("=" * 60)
     logger.info("Whisper LoRA 微调训练开始")
     logger.info("=" * 60)
@@ -232,92 +337,143 @@ def main():
     logger.info(f"训练轮数: {args.num_train_epochs}")
     logger.info(f"批次大小: {args.train_batch_size}")
     logger.info("=" * 60)
-    
+
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     # 加载数据集
-    data_files = {'train': args.train_manifest, 'validation': args.eval_manifest, 'test': args.test_manifest}
-    datasets = load_dataset('csv', data_files=data_files)
-    
+    data_files = {
+        "train": args.train_manifest,
+        "validation": args.eval_manifest,
+        "test": args.test_manifest,
+    }
+    datasets = load_dataset("csv", data_files=data_files)
+
     # 加载 Whisper 处理器和模型
     try:
-        processor = WhisperProcessor.from_pretrained(args.model_name_or_path)
+        processor = WhisperProcessor.from_pretrained(
+            args.model_name_or_path
+        )
     except ValueError as e:
         logger.warning(f"WhisperProcessor 加载失败 ({e})，尝试手动构造...")
         from transformers import WhisperFeatureExtractor, WhisperTokenizer
-        fe = WhisperFeatureExtractor.from_pretrained(args.model_name_or_path)
-        tok = WhisperTokenizer.from_pretrained(args.model_name_or_path, use_fast=False)
+
+        fe = WhisperFeatureExtractor.from_pretrained(
+            args.model_name_or_path
+        )
+        tok = WhisperTokenizer.from_pretrained(
+            args.model_name_or_path, use_fast=False
+        )
         processor = WhisperProcessor(feature_extractor=fe, tokenizer=tok)
-    
+
     # 检查是否有检查点
-    checkpoint_dir, opt_state, sched_state, start_epoch, start_step, best_metric = load_checkpoint(args.output_dir, logger)
-    
+    (
+        checkpoint_dir,
+        opt_state,
+        sched_state,
+        start_epoch,
+        start_step,
+        best_metric,
+    ) = load_checkpoint(args.output_dir, logger)
+
     if checkpoint_dir:
         # 从检查点加载模型
         model = PeftModel.from_pretrained(
-            WhisperForConditionalGeneration.from_pretrained(args.model_name_or_path),
-            checkpoint_dir
+            WhisperForConditionalGeneration.from_pretrained(
+                args.model_name_or_path
+            ),
+            checkpoint_dir,
         )
         logger.info("从检查点加载模型")
     else:
         # 加载基础模型并应用 LoRA
-        model = WhisperForConditionalGeneration.from_pretrained(args.model_name_or_path)
-        modules = [m.strip() for m in args.target_modules.split(',') if m.strip()]
+        model = WhisperForConditionalGeneration.from_pretrained(
+            args.model_name_or_path
+        )
+        modules = [
+            m.strip() for m in args.target_modules.split(",") if m.strip()
+        ]
         lora_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
             target_modules=modules,
             lora_dropout=args.lora_dropout,
-            bias='none',
-            task_type='SEQ_2_SEQ_LM'
+            bias="none",
+            task_type="SEQ_2_SEQ_LM",
         )
         model = get_peft_model(model, lora_config)
         logger.info("创建新的 LoRA 模型")
-    
+
     # 补丁 base_model.forward
     orig_base_forward = model.base_model.forward
+
     def patched_base_forward(self, *args, **kwargs):
-        kwargs.pop('input_ids', None)
-        kwargs.pop('inputs_embeds', None)
+        kwargs.pop("input_ids", None)
+        kwargs.pop("inputs_embeds", None)
         return orig_base_forward(*args, **kwargs)
-    model.base_model.forward = patched_base_forward.__get__(model.base_model, type(model.base_model))
-    
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    model.base_model.forward = patched_base_forward.__get__(
+        model.base_model, type(model.base_model)
+    )
+
+    trainable_params = sum(
+        p.numel() for p in model.parameters() if p.requires_grad
+    )
     total_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"可训练参数: {trainable_params}/{total_params} ({100*trainable_params/total_params:.2f}%)")
-    
+    logger.info(
+        f"可训练参数: {trainable_params}/{total_params} ({100*trainable_params/total_params:.2f}%)"
+    )
+
     model = ModelWrapper(model)
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
         logger.info("已启用梯度检查点")
-    
+
     # 数据预处理
     datasets = datasets.map(
         lambda b: prepare_dataset(b, processor),
-        remove_columns=['audio_filepath', 'text'], num_proc=1
+        remove_columns=["audio_filepath", "text"],
+        num_proc=1,
     )
-    
-    data_collator = SpeechSeq2SeqCollator(processor=processor, padding=True)
-    
+
+    data_collator = SpeechSeq2SeqCollator(
+        processor=processor, padding=True
+    )
+
     # 初始化 Accelerator
     accelerator = Accelerator(mixed_precision=args.mixed_precision)
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    
+    optimizer = AdamW(
+        model.parameters(),
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay,
+    )
+
     train_loader = DataLoader(
-        datasets['train'], batch_size=args.train_batch_size,
-        shuffle=True, collate_fn=data_collator
+        datasets["train"],
+        batch_size=args.train_batch_size,
+        shuffle=True,
+        collate_fn=data_collator,
     )
     eval_loader = DataLoader(
-        datasets['validation'], batch_size=args.eval_batch_size,
-        shuffle=False, collate_fn=data_collator
+        datasets["validation"],
+        batch_size=args.eval_batch_size,
+        shuffle=False,
+        collate_fn=data_collator,
     )
-    
+
     # 计算学习率调度器参数
-    num_update_steps_per_epoch = len(train_loader) // args.gradient_accumulation_steps
+    num_update_steps_per_epoch = (
+        len(train_loader) // args.gradient_accumulation_steps
+    )
     max_train_steps = num_update_steps_per_epoch * args.num_train_epochs
-    num_warmup_steps = args.warmup_steps if args.warmup_steps > 0 else int(max_train_steps * 0.1)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps, max_train_steps)
-    
+    num_warmup_steps = (
+        args.warmup_steps
+        if args.warmup_steps > 0
+        else int(max_train_steps * 0.1)
+    )
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps, max_train_steps
+    )
+
     # 从检查点恢复优化器和调度器状态
     if opt_state is not None:
         optimizer.load_state_dict(opt_state)
@@ -325,67 +481,99 @@ def main():
     if sched_state is not None:
         scheduler.load_state_dict(sched_state)
         logger.info("已恢复调度器状态")
-    
+
     torch.cuda.empty_cache()
     model, optimizer, train_loader, eval_loader = accelerator.prepare(
         model, optimizer, train_loader, eval_loader
     )
     model = ModelWrapper(model)
     model.train()
-    
+
     # 早停相关变量
-    best_metric_value = best_metric if best_metric is not None else float('inf') if args.eval_metric.lower() == 'cer' else float('-inf')
+    best_metric_value = (
+        best_metric
+        if best_metric is not None
+        else (
+            float("inf")
+            if args.eval_metric.lower() == "cer"
+            else float("-inf")
+        )
+    )
     patience_counter = 0
     global_step = start_step
-    
+
     # 训练循环
     for epoch in range(start_epoch, args.num_train_epochs):
         total_loss = 0.0
         model.train()
-        
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.num_train_epochs}")
+
+        progress_bar = tqdm(
+            train_loader, desc=f"Epoch {epoch+1}/{args.num_train_epochs}"
+        )
         for step, batch in enumerate(progress_bar):
             if epoch == start_epoch and step < start_step:
                 continue  # 跳过已训练的步骤
-            
-            inputs = {'input_features': batch['input_features'], 'labels': batch['labels']}
+
+            inputs = {
+                "input_features": batch["input_features"],
+                "labels": batch["labels"],
+            }
             outputs = model(**inputs)
             loss = outputs.loss
             loss = loss / args.gradient_accumulation_steps
             accelerator.backward(loss)
-            
+
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
                 torch.cuda.empty_cache()
-            
+
             total_loss += loss.item() * args.gradient_accumulation_steps
-            progress_bar.set_postfix({'loss': f'{loss.item():.4f}'})
-            
+            progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
+
             # 检查点保存（按步数）
-            if args.checkpoint_steps and global_step > 0 and global_step % args.checkpoint_steps == 0:
-                save_checkpoint(model, optimizer, scheduler, epoch, global_step, best_metric_value, args.output_dir, accelerator, logger)
-        
+            if (
+                args.checkpoint_steps
+                and global_step > 0
+                and global_step % args.checkpoint_steps == 0
+            ):
+                save_checkpoint(
+                    model,
+                    optimizer,
+                    scheduler,
+                    epoch,
+                    global_step,
+                    best_metric_value,
+                    args.output_dir,
+                    accelerator,
+                    logger,
+                )
+
         avg_loss = total_loss / len(train_loader)
-        logger.info(f"Epoch {epoch+1}/{args.num_train_epochs}, 平均 Loss: {avg_loss:.4f}")
-        
+        logger.info(
+            f"Epoch {epoch+1}/{args.num_train_epochs}, 平均 Loss: {avg_loss:.4f}"
+        )
+
         # 验证集评估
         model.eval()
         torch.cuda.empty_cache()
         all_preds, all_labels = [], []
-        
+
         for batch in tqdm(eval_loader, desc="评估中"):
             with torch.no_grad():
-                gen_model = model.base_model if hasattr(model, 'base_model') else model
-                forced_decoder_ids = processor.get_decoder_prompt_ids(
-                    language=args.language,
-                    task=args.task
+                gen_model = (
+                    model.base_model
+                    if hasattr(model, "base_model")
+                    else model
                 )
-                mask = batch.get('attention_mask')
+                forced_decoder_ids = processor.get_decoder_prompt_ids(
+                    language=args.language, task=args.task
+                )
+                mask = batch.get("attention_mask")
                 generated_ids = gen_model.generate(
-                    input_features=batch['input_features'],
+                    input_features=batch["input_features"],
                     attention_mask=mask,
                     forced_decoder_ids=forced_decoder_ids,
                     eos_token_id=processor.tokenizer.eos_token_id,
@@ -397,34 +585,42 @@ def main():
                     length_penalty=args.length_penalty,
                     do_sample=args.do_sample,
                     top_k=args.top_k,
-                    top_p=args.top_p
+                    top_p=args.top_p,
                 )
-                raw_preds = processor.batch_decode(generated_ids, skip_special_tokens=True)
-                preds = [re.sub(r"<\|.*?\|>", "", p).strip() for p in raw_preds]
-                
-                labels = batch['labels']
+                raw_preds = processor.batch_decode(
+                    generated_ids, skip_special_tokens=True
+                )
+                preds = [
+                    re.sub(r"<\|.*?\|>", "", p).strip() for p in raw_preds
+                ]
+
+                labels = batch["labels"]
                 labels[labels == -100] = processor.tokenizer.pad_token_id
                 refs = processor.batch_decode(labels, group_tokens=False)
-                refs_clean = [re.sub(r"<\|.*?\|>", "", r).strip() for r in refs]
+                refs_clean = [
+                    re.sub(r"<\|.*?\|>", "", r).strip() for r in refs
+                ]
                 all_preds.extend(preds)
                 all_labels.extend(refs_clean)
-        
+
         # 计算评估指标
-        if args.eval_metric.lower() == 'wer':
+        if args.eval_metric.lower() == "wer":
             metric_value = jiwer.wer(all_labels, all_preds)
             is_better = metric_value < best_metric_value
         else:
             metric_value = jiwer.cer(all_labels, all_preds)
             is_better = metric_value < best_metric_value
-        
-        logger.info(f"Epoch {epoch+1}/{args.num_train_epochs}, {args.eval_metric.upper()}: {metric_value:.4f}")
-        
+
+        logger.info(
+            f"Epoch {epoch+1}/{args.num_train_epochs}, {args.eval_metric.upper()}: {metric_value:.4f}"
+        )
+
         # 打印样本输出
         logger.info("样本验证输出:")
         for i in range(min(3, len(all_preds))):
             logger.info(f"  {i+1}. 预测: {all_preds[i]}")
             logger.info(f"     参考: {all_labels[i]}")
-        
+
         # 最佳模型保存和早停检查
         if is_better:
             improvement = abs(best_metric_value - metric_value)
@@ -434,28 +630,49 @@ def main():
                 # 保存最佳模型
                 accelerator.wait_for_everyone()
                 unwrapped_model = accelerator.unwrap_model(model)
-                best_model_dir = os.path.join(args.output_dir, 'best_model')
+                best_model_dir = os.path.join(
+                    args.output_dir, "best_model"
+                )
                 os.makedirs(best_model_dir, exist_ok=True)
                 unwrapped_model.save_pretrained(best_model_dir)
                 processor.save_pretrained(best_model_dir)
-                logger.info(f"保存最佳模型到 {best_model_dir} ({args.eval_metric.upper()}: {best_metric_value:.4f})")
+                logger.info(
+                    f"保存最佳模型到 {best_model_dir} ({args.eval_metric.upper()}: {best_metric_value:.4f})"
+                )
             else:
-                logger.info(f"改善幅度 {improvement:.6f} 小于阈值 {args.early_stopping_threshold}，不更新最佳模型")
+                logger.info(
+                    f"改善幅度 {improvement:.6f} 小于阈值 {args.early_stopping_threshold}，不更新最佳模型"
+                )
         else:
             patience_counter += 1
-            logger.info(f"验证指标未改善，耐心计数: {patience_counter}/{args.early_stopping_patience}")
-        
+            logger.info(
+                f"验证指标未改善，耐心计数: {patience_counter}/{args.early_stopping_patience}"
+            )
+
         # 早停检查
         if patience_counter >= args.early_stopping_patience:
             logger.info(f"早停触发：验证指标连续 {args.early_stopping_patience} 轮未改善")
             break
-        
+
         # 检查点保存（按epoch）
-        if args.checkpoint_epochs > 0 and (epoch + 1) % int(1 / args.checkpoint_epochs) == 0:
-            save_checkpoint(model, optimizer, scheduler, epoch + 1, global_step, best_metric_value, args.output_dir, accelerator, logger)
-        
+        if (
+            args.checkpoint_epochs > 0
+            and (epoch + 1) % int(1 / args.checkpoint_epochs) == 0
+        ):
+            save_checkpoint(
+                model,
+                optimizer,
+                scheduler,
+                epoch + 1,
+                global_step,
+                best_metric_value,
+                args.output_dir,
+                accelerator,
+                logger,
+            )
+
         model.train()
-    
+
     # 训练完成，保存最终模型
     logger.info("训练完成，保存最终模型...")
     accelerator.wait_for_everyone()
@@ -463,14 +680,20 @@ def main():
     unwrapped_model.save_pretrained(args.output_dir)
     processor.save_pretrained(args.output_dir)
     logger.info(f"最终模型已保存到 {args.output_dir}")
-    
+
     # 保存合并后的模型
     if args.save_merged_model:
-        merge_and_save_model(unwrapped_model, args.model_name_or_path, args.output_dir, logger)
-    
+        merge_and_save_model(
+            unwrapped_model,
+            args.model_name_or_path,
+            args.output_dir,
+            logger,
+        )
+
     logger.info("=" * 60)
     logger.info("训练完成")
     logger.info("=" * 60)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
