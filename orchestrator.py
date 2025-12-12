@@ -8,7 +8,6 @@ import subprocess
 import sys
 import time
 import traceback
-import shutil
 
 from logging_utils import setup_logging  # 公共日志模块
 
@@ -203,6 +202,12 @@ if __name__ == "__main__":
         nargs="*",
         help="覆盖配置项，格式: key1=value1 key2=value2",
     )
+    parser.add_argument(
+        "--speakers",
+        type=str,
+        nargs="*",
+        help="指定要训练的说话人ID列表，空或未指定则训练 config中所有 speakers 或原始目录",
+    )
     args = parser.parse_args()
 
     # 先加载配置文件（logger还未初始化）
@@ -240,6 +245,26 @@ if __name__ == "__main__":
             target[keys[-1]] = value
             print(f"已覆盖配置项 {key} = {value}")
 
+    # 处理说话人筛选
+    speakers_map = config.get("speakers", {})
+    if args.speakers:
+        selected = set(args.speakers)
+        # 过滤 mapping
+        speakers_map = {
+            k: v for k, v in speakers_map.items() if k in selected
+        }
+        missing = selected - speakers_map.keys()
+        for m in missing:
+            print(f"警告: 配置中不存在说话人 {m}")
+    # 构造说话人列表 [(id, raw_dir)]，若无 mapping 则使用单一原始目录
+    if speakers_map:
+        speaker_list = list(speakers_map.items())
+    else:
+        # 若未配置 speakers，则使用 config 中的 raw_audio_dir
+        speaker_list = [
+            (None, config.get("paths", {}).get("raw_audio_dir"))
+        ]
+
     # 初始化日志系统
     log_config = config.get("logging", {})
     # 将日志路径解析为相对于脚本所在目录的绝对路径
@@ -275,11 +300,6 @@ if __name__ == "__main__":
     skip_manifest = iteration.get("skip_manifest", False)
     stop_after_labels = iteration.get("stop_after_labels", False)
 
-    os.makedirs(labels_dir, exist_ok=True)
-    os.makedirs(manifest_dir, exist_ok=True)
-    os.makedirs(model_dir, exist_ok=True)
-    os.makedirs(ggml_dir, exist_ok=True)
-
     # 获取脚本目录
     base = os.path.dirname(__file__)
     # 默认切分脚本路径
@@ -298,404 +318,464 @@ if __name__ == "__main__":
     logger.info(f"GGML目录: {ggml_dir}")
     logger.info(f"迭代周期: {interval}秒")
     logger.info("=" * 60)
-    iteration_count = 0
-    while True:
-        iteration_count += 1
-        logger.info("=" * 60)
-        logger.info(f"开始第 {iteration_count} 轮迭代")
-        logger.info("=" * 60)
-        try:
-            # 0. 音频切分（若提供原始长音频目录，则对每个文件进行切分）
-            if raw_audio_dir:
-                sample_rate = str(audio_split.get("sample_rate", 16000))
-                frame_duration = str(audio_split.get("frame_duration", 30))
-                vad_aggressiveness = str(
-                    audio_split.get("vad_aggressiveness", 2)
-                )
-                min_segment_duration = str(
-                    audio_split.get("min_segment_duration", 1500)
-                )
-                merge_threshold = str(
-                    audio_split.get("merge_threshold", 15)
-                )
 
-                for ext in ("*.wav", "*.flac", "*.mp3"):
-                    for infile in glob.glob(
-                        os.path.join(raw_audio_dir, ext)
-                    ):
-                        run_step(
-                            f"切分音频 {os.path.basename(infile)}",
-                            [
-                                sys.executable,
-                                split_script,
-                                "--input",
-                                infile,
-                                "--output_dir",
-                                audio_dir,
-                                "--sample_rate",
-                                sample_rate,
-                                "--frame_duration",
-                                frame_duration,
-                                "--vad_aggressiveness",
-                                vad_aggressiveness,
-                                "--min_segment_duration",
-                                min_segment_duration,
-                                "--merge_threshold",
-                                merge_threshold,
-                            ],
-                            logger,
-                        )
+    # 按说话人迭代
+    for spk, raw_audio_dir in speaker_list:
+        iteration_count = 0
+        # 更新各阶段目录
+        if spk:
+            audio_dir = os.path.join(paths.get("audio_dir"), spk)
+            labels_dir = os.path.join(paths.get("labels_dir"), spk)
+            manifest_dir = os.path.join(paths.get("manifest_dir"), spk)
+            model_dir = os.path.join(paths.get("model_dir"), spk)
+            ggml_dir = os.path.join(paths.get("ggml_dir"), spk)
+        else:
+            raw_audio_dir = paths.get("raw_audio_dir")
+            audio_dir = paths.get("audio_dir")
+            labels_dir = paths.get("labels_dir")
+            manifest_dir = paths.get("manifest_dir")
+            model_dir = paths.get("model_dir")
+            ggml_dir = paths.get("ggml_dir")
+        # 确保目录存在
+        os.makedirs(labels_dir, exist_ok=True)
+        os.makedirs(manifest_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
+        os.makedirs(ggml_dir, exist_ok=True)
+        while True:
+            iteration_count += 1
+            logger.info("=" * 60)
+            logger.info(f"开始第 {iteration_count} 轮迭代")
+            logger.info("=" * 60)
+            # 如果不是第一次迭代，尝试使用上轮最佳模型进行标注和训练
+            prev_model = None
+            if iteration_count > 1:
+                best_model_dir = os.path.join(model_dir, "best_model")
+                if os.path.isdir(best_model_dir):
+                    prev_model = best_model_dir
+                else:
+                    prev_model = model_dir
+                logger.info(f"检测到上轮模型: {prev_model}，用于本轮标注和训练")
 
-            # 1. 自动标注：始终调用，让 labeler.py 自行跳过已标注文件
-            # 支持使用微调后的模型进行标注（自迭代功能）
-            max_samples = labeling.get("max_samples", 100)
-            temperature = labeling.get("temperature", 1.0)
-            # 支持指定设备，-1 表示 CPU，>=0 表示 GPU 设备编号
-            device = labeling.get("device", -1)
-            labeling_model = labeling.get(
-                "model_name_or_path", "openai/whisper-large-v3-turbo"
-            )
-            compression_ratio_threshold = str(
-                labeling.get("compression_ratio_threshold", 1.35)
-            )
-            logprob_threshold = str(
-                labeling.get("logprob_threshold", -1.0)
-            )
-            logger.info(f"使用标注模型: {labeling_model}")
-            run_step(
-                "标签生成",
-                [
-                    sys.executable,
-                    os.path.join(base, "labeler.py"),
-                    "--audio_dir",
-                    audio_dir,
-                    "--labels_dir",
-                    labels_dir,
-                    "--model_name_or_path",
-                    labeling_model,
-                    "--device",
-                    str(device),
-                    "--compression_ratio_threshold",
-                    compression_ratio_threshold,
-                    "--logprob_threshold",
-                    logprob_threshold,
-                    "--max_samples",
-                    str(max_samples),
-                    "--temperature",
-                    str(temperature),
-                ],
-                logger,
-            )
+            try:
+                # 0. 音频切分（若提供原始长音频目录，则对每个文件进行切分）
+                if raw_audio_dir:
+                    sample_rate = str(
+                        audio_split.get("sample_rate", 16000)
+                    )
+                    frame_duration = str(
+                        audio_split.get("frame_duration", 30)
+                    )
+                    vad_aggressiveness = str(
+                        audio_split.get("vad_aggressiveness", 2)
+                    )
+                    min_segment_duration = str(
+                        audio_split.get("min_segment_duration", 1500)
+                    )
+                    merge_threshold = str(
+                        audio_split.get("merge_threshold", 15)
+                    )
 
-            # 2. 构建清单（可跳过）
-            if skip_manifest:
-                logger.info("已启用 skip_manifest，跳过清单构建。")
-            else:
+                    for ext in ("*.wav", "*.flac", "*.mp3"):
+                        for infile in glob.glob(
+                            os.path.join(raw_audio_dir, ext)
+                        ):
+                            run_step(
+                                f"切分音频 {os.path.basename(infile)}",
+                                [
+                                    sys.executable,
+                                    split_script,
+                                    "--input",
+                                    infile,
+                                    "--output_dir",
+                                    audio_dir,
+                                    "--sample_rate",
+                                    sample_rate,
+                                    "--frame_duration",
+                                    frame_duration,
+                                    "--vad_aggressiveness",
+                                    vad_aggressiveness,
+                                    "--min_segment_duration",
+                                    min_segment_duration,
+                                    "--merge_threshold",
+                                    merge_threshold,
+                                ],
+                                logger,
+                            )
+
+                # 1. 自动标注：始终调用，让 labeler.py 自行跳过已标注文件
+                # 支持使用微调后的模型进行标注（自迭代功能）
+                max_samples = labeling.get("max_samples", 100)
+                temperature = labeling.get("temperature", 1.0)
+                # 支持指定设备，-1 表示 CPU，>=0 表示 GPU 设备编号
+                device = labeling.get("device", -1)
+                # 优先使用上轮模型，否则使用配置模型
+                labeling_model = (
+                    prev_model
+                    if prev_model
+                    else labeling.get(
+                        "model_name_or_path",
+                        "openai/whisper-large-v3-turbo",
+                    )
+                )
+                compression_ratio_threshold = str(
+                    labeling.get("compression_ratio_threshold", 1.35)
+                )
+                logprob_threshold = str(
+                    labeling.get("logprob_threshold", -1.0)
+                )
+                logger.info(f"使用标注模型: {labeling_model}")
                 run_step(
-                    "清单构建",
+                    "标签生成",
                     [
                         sys.executable,
-                        os.path.join(base, "dataset_manager.py"),
+                        os.path.join(base, "labeler.py"),
                         "--audio_dir",
                         audio_dir,
                         "--labels_dir",
                         labels_dir,
-                        "--output_dir",
-                        manifest_dir,
+                        "--model_name_or_path",
+                        labeling_model,
+                        "--device",
+                        str(device),
+                        "--compression_ratio_threshold",
+                        compression_ratio_threshold,
+                        "--logprob_threshold",
+                        logprob_threshold,
+                        "--max_samples",
+                        str(max_samples),
+                        "--temperature",
+                        str(temperature),
                     ],
                     logger,
                 )
-                # 检查清单文件记录数
+
+                # 2. 构建清单（可跳过）
+                if skip_manifest:
+                    logger.info("已启用 skip_manifest，跳过清单构建。")
+                else:
+                    run_step(
+                        "清单构建",
+                        [
+                            sys.executable,
+                            os.path.join(base, "dataset_manager.py"),
+                            "--audio_dir",
+                            audio_dir,
+                            "--labels_dir",
+                            labels_dir,
+                            "--output_dir",
+                            manifest_dir,
+                        ],
+                        logger,
+                    )
+                    # 检查清单文件记录数
+                    train_csv = os.path.join(manifest_dir, "train.csv")
+                    val_csv = os.path.join(manifest_dir, "val.csv")
+                    test_csv = os.path.join(manifest_dir, "test.csv")
+
+                    def count_records(csv_path):
+                        try:
+                            with open(
+                                csv_path, "r", encoding="utf-8"
+                            ) as f:
+                                lines = f.read().splitlines()
+                            return max(0, len(lines) - 1)
+                        except Exception:
+                            return 0
+
+                    train_count = count_records(train_csv)
+                    val_count = count_records(val_csv)
+                    test_count = count_records(test_csv)
+                    logger.info(
+                        f"清单写入数量: train={train_count}, val={val_count}, test={test_count}"
+                    )
+                    if (
+                        train_count == 0
+                        and val_count == 0
+                        and test_count == 0
+                    ):
+                        logger.error("清单为空，标签生成或数据管理未产生任何数据，终止流程。")
+                        sys.exit(1)
+
+                # 抽取部分标签用于人工标注
+                if annotation_ratio > 0:
+                    import random
+                    import shutil
+
+                    # 准备 annotation 目录
+                    anno_labels = labels_dir + "_annotation"
+                    anno_audio = audio_dir + "_annotation"
+                    os.makedirs(anno_labels, exist_ok=True)
+                    os.makedirs(anno_audio, exist_ok=True)
+                    # 递归获取所有标签文件
+                    txt_paths = []
+                    for root2, _, files2 in os.walk(labels_dir):
+                        for fname2 in files2:
+                            if fname2.endswith(".txt"):
+                                txt_paths.append(
+                                    os.path.join(root2, fname2)
+                                )
+                    total = len(txt_paths)
+                    logger.info(f"总共找到 {total} 条标签文件（包含子目录）")
+                    if total == 0:
+                        logger.warning("未找到任何标签文件，跳过抽样")
+                    else:
+                        # 计算抽样数量，至少 1，至多 total
+                        n = max(1, int(total * annotation_ratio))
+                        n = min(n, total)
+                        logger.info(f"抽样数量: {n}")
+                        samples = random.sample(txt_paths, n)
+                        for tpath in samples:
+                            # 计算相对路径和创建目标子目录
+                            rel = os.path.relpath(tpath, labels_dir)
+                            subdir = os.path.dirname(rel)
+                            target_txt_dir = os.path.join(
+                                anno_labels, subdir
+                            )
+                            os.makedirs(target_txt_dir, exist_ok=True)
+                            shutil.copy(
+                                tpath,
+                                os.path.join(
+                                    target_txt_dir, os.path.basename(tpath)
+                                ),
+                            )
+                            # 对应音频的相对路径
+                            wav_rel = os.path.splitext(rel)[0] + ".wav"
+                            src_wav = os.path.join(audio_dir, wav_rel)
+                            if os.path.exists(src_wav):
+                                target_wav_dir = os.path.join(
+                                    anno_audio, subdir
+                                )
+                                os.makedirs(target_wav_dir, exist_ok=True)
+                                shutil.copy(
+                                    src_wav,
+                                    os.path.join(
+                                        target_wav_dir,
+                                        os.path.basename(src_wav),
+                                    ),
+                                )
+                        logger.info(
+                            f"已抽取 {n} 条文件到人工标注目录: {anno_labels}, {anno_audio}"
+                        )
+
+                # 如果只运行到标注阶段，退出流程
+                if stop_after_labels:
+                    logger.info("已启用 stop_after_labels，流程结束。")
+                    sys.exit(0)
+
+                # 3. 如果 test_size>0，截断 manifest
+                if test_size > 0:
+                    logger.info(f"测试模式：截取每个 split 前 {test_size} 条样本")
+                    for fname in ["train.csv", "val.csv", "test.csv"]:
+                        path = os.path.join(manifest_dir, fname)
+                        try:
+                            with open(path, "r", encoding="utf-8") as f:
+                                lines = f.read().splitlines()
+                            header, rest = lines[0], lines[1:]
+                            truncated = rest[:test_size]
+                            with open(path, "w", encoding="utf-8") as f:
+                                f.write(header + "\n")
+                                f.write("\n".join(truncated) + "\n")
+                            logger.info(
+                                f"已截断 {fname} 到 {len(truncated)} 条记录"
+                            )
+                        except Exception as e:
+                            logger.error(f"截断 {fname} 失败: {e}")
+                            logger.error(
+                                f"错误堆栈:\n{traceback.format_exc()}"
+                            )
+
+                # 4. LoRA 微调 (使用已验证 train_lora.py)
                 train_csv = os.path.join(manifest_dir, "train.csv")
                 val_csv = os.path.join(manifest_dir, "val.csv")
                 test_csv = os.path.join(manifest_dir, "test.csv")
-                def count_records(csv_path):
-                    try:
-                        with open(csv_path, 'r', encoding='utf-8') as f:
-                            lines = f.read().splitlines()
-                        return max(0, len(lines) - 1)
-                    except Exception:
-                        return 0
-                train_count = count_records(train_csv)
-                val_count = count_records(val_csv)
-                test_count = count_records(test_csv)
-                logger.info(f"清单写入数量: train={train_count}, val={val_count}, test={test_count}")
-                if train_count == 0 and val_count == 0 and test_count == 0:
-                    logger.error("清单为空，标签生成或数据管理未产生任何数据，终止流程。")
-                    sys.exit(1)
 
-            # 抽取部分标签用于人工标注
-            if annotation_ratio > 0:
-                import random
-                import shutil
-
-                # 准备 annotation 目录
-                anno_labels = labels_dir + "_annotation"
-                anno_audio = audio_dir + "_annotation"
-                os.makedirs(anno_labels, exist_ok=True)
-                os.makedirs(anno_audio, exist_ok=True)
-                # 递归获取所有标签文件
-                txt_paths = []
-                for root2, _, files2 in os.walk(labels_dir):
-                    for fname2 in files2:
-                        if fname2.endswith(".txt"):
-                            txt_paths.append(os.path.join(root2, fname2))
-                total = len(txt_paths)
-                logger.info(f"总共找到 {total} 条标签文件（包含子目录）")
-                if total == 0:
-                    logger.warning("未找到任何标签文件，跳过抽样")
-                else:
-                    # 计算抽样数量，至少 1，至多 total
-                    n = max(1, int(total * annotation_ratio))
-                    n = min(n, total)
-                    logger.info(f"抽样数量: {n}")
-                    samples = random.sample(txt_paths, n)
-                    for tpath in samples:
-                        # 计算相对路径和创建目标子目录
-                        rel = os.path.relpath(tpath, labels_dir)
-                        subdir = os.path.dirname(rel)
-                        target_txt_dir = os.path.join(anno_labels, subdir)
-                        os.makedirs(target_txt_dir, exist_ok=True)
-                        shutil.copy(
-                            tpath,
-                            os.path.join(
-                                target_txt_dir, os.path.basename(tpath)
-                            ),
-                        )
-                        # 对应音频的相对路径
-                        wav_rel = os.path.splitext(rel)[0] + ".wav"
-                        src_wav = os.path.join(audio_dir, wav_rel)
-                        if os.path.exists(src_wav):
-                            target_wav_dir = os.path.join(
-                                anno_audio, subdir
-                            )
-                            os.makedirs(target_wav_dir, exist_ok=True)
-                            shutil.copy(
-                                src_wav,
-                                os.path.join(
-                                    target_wav_dir,
-                                    os.path.basename(src_wav),
-                                ),
-                            )
-                    logger.info(
-                        f"已抽取 {n} 条文件到人工标注目录: {anno_labels}, {anno_audio}"
-                    )
-
-            # 如果只运行到标注阶段，退出流程
-            if stop_after_labels:
-                logger.info("已启用 stop_after_labels，流程结束。")
-                sys.exit(0)
-
-            # 3. 如果 test_size>0，截断 manifest
-            if test_size > 0:
-                logger.info(f"测试模式：截取每个 split 前 {test_size} 条样本")
-                for fname in ["train.csv", "val.csv", "test.csv"]:
-                    path = os.path.join(manifest_dir, fname)
-                    try:
-                        with open(path, "r", encoding="utf-8") as f:
-                            lines = f.read().splitlines()
-                        header, rest = lines[0], lines[1:]
-                        truncated = rest[:test_size]
-                        with open(path, "w", encoding="utf-8") as f:
-                            f.write(header + "\n")
-                            f.write("\n".join(truncated) + "\n")
-                        logger.info(f"已截断 {fname} 到 {len(truncated)} 条记录")
-                    except Exception as e:
-                        logger.error(f"截断 {fname} 失败: {e}")
-                        logger.error(f"错误堆栈:\n{traceback.format_exc()}")
-
-            # 4. LoRA 微调 (使用已验证 train_lora.py)
-            train_csv = os.path.join(manifest_dir, "train.csv")
-            val_csv = os.path.join(manifest_dir, "val.csv")
-            test_csv = os.path.join(manifest_dir, "test.csv")
-
-            # 构建训练命令，使用配置文件中的训练超参
-            train_cmd = [
-                sys.executable,
-                os.path.join(base, "train_lora.py"),
-                "--train_manifest",
-                train_csv,
-                "--eval_manifest",
-                val_csv,
-                "--test_manifest",
-                test_csv,
-                "--model_name_or_path",
-                training.get(
-                    "model_name_or_path", "openai/whisper-large-v3-turbo"
-                ),
-                "--output_dir",
-                model_dir,
-                "--num_train_epochs",
-                str(training.get("num_train_epochs", 3)),
-                "--train_batch_size",
-                str(training.get("train_batch_size", 4)),
-                "--eval_batch_size",
-                str(training.get("eval_batch_size", 4)),
-                "--mixed_precision",
-                training.get("mixed_precision", "fp16"),
-                "--gradient_accumulation_steps",
-                str(training.get("gradient_accumulation_steps", 4)),
-                "--language",
-                training.get("language", "zh"),
-                "--task",
-                training.get("task", "transcribe"),
-                "--max_new_tokens",
-                str(training.get("max_new_tokens", 256)),
-                "--no_repeat_ngram_size",
-                str(training.get("no_repeat_ngram_size", 3)),
-                "--length_penalty",
-                str(training.get("length_penalty", 1.2)),
-                "--eval_metric",
-                training.get("eval_metric", "cer"),
-                "--repetition_penalty",
-                str(training.get("repetition_penalty", 2.0)),
-            ]
-
-            # 添加可选训练超参
-            if "learning_rate" in training:
-                train_cmd.extend(
-                    ["--learning_rate", str(training["learning_rate"])]
-                )
-            if "warmup_steps" in training:
-                train_cmd.extend(
-                    ["--warmup_steps", str(training["warmup_steps"])]
-                )
-            if "weight_decay" in training:
-                train_cmd.extend(
-                    ["--weight_decay", str(training["weight_decay"])]
-                )
-            if "lora_r" in training:
-                train_cmd.extend(["--lora_r", str(training["lora_r"])])
-            if "lora_alpha" in training:
-                train_cmd.extend(
-                    ["--lora_alpha", str(training["lora_alpha"])]
-                )
-            if "lora_dropout" in training:
-                train_cmd.extend(
-                    ["--lora_dropout", str(training["lora_dropout"])]
-                )
-            if "target_modules" in training:
-                train_cmd.extend(
-                    ["--target_modules", training["target_modules"]]
-                )
-            if training.get("gradient_checkpointing", False):
-                train_cmd.append("--gradient_checkpointing")
-            if (
-                "checkpoint_steps" in training
-                and training["checkpoint_steps"]
-            ):
-                train_cmd.extend(
-                    [
-                        "--checkpoint_steps",
-                        str(training["checkpoint_steps"]),
-                    ]
-                )
-            if "checkpoint_epochs" in training:
-                train_cmd.extend(
-                    [
-                        "--checkpoint_epochs",
-                        str(training["checkpoint_epochs"]),
-                    ]
-                )
-            if "early_stopping_patience" in training:
-                train_cmd.extend(
-                    [
-                        "--early_stopping_patience",
-                        str(training["early_stopping_patience"]),
-                    ]
-                )
-            if "early_stopping_threshold" in training:
-                train_cmd.extend(
-                    [
-                        "--early_stopping_threshold",
-                        str(training["early_stopping_threshold"]),
-                    ]
-                )
-            if training.get("save_merged_model", False):
-                train_cmd.append("--save_merged_model")
-
-            run_step("模型训练", train_cmd, logger)
-
-            # 5. 模型评估
-            eval_cmd = [
-                sys.executable,
-                os.path.join(base, "evaluator.py"),
-                "--model_dir",
-                model_dir,
-                "--test_manifest",
-                test_csv,
-                "--output_file",
-                os.path.join(manifest_dir, "eval_results.txt"),
-                "--metric",
-                training.get("eval_metric", "cer"),
-                "--language",
-                training.get("language", "zh"),
-                "--task",
-                training.get("task", "transcribe"),
-            ]
-            # 传递基础模型路径（用于 LoRA 模型合并）
-            if "model_name_or_path" in training:
-                eval_cmd.extend(
-                    ["--base_model_path", training["model_name_or_path"]]
-                )
-            run_step("模型评估", eval_cmd, logger)
-
-            # 6. 转换 GGML
-            # 使用 H5 转换脚本进行 GGML 模型转换
-            run_step(
-                "模型转换",
-                [
+                # 构建训练命令，使用配置文件中的训练超参
+                train_cmd = [
                     sys.executable,
-                    os.path.join(base, "converter.py"),
+                    os.path.join(base, "train_lora.py"),
+                    "--train_manifest",
+                    train_csv,
+                    "--eval_manifest",
+                    val_csv,
+                    "--test_manifest",
+                    test_csv,
+                    "--model_name_or_path",
+                    prev_model
+                    if prev_model
+                    else training.get(
+                        "model_name_or_path",
+                        "openai/whisper-large-v3-turbo",
+                    ),
+                    "--output_dir",
+                    model_dir,
+                    "--num_train_epochs",
+                    str(training.get("num_train_epochs", 3)),
+                    "--train_batch_size",
+                    str(training.get("train_batch_size", 4)),
+                    "--eval_batch_size",
+                    str(training.get("eval_batch_size", 4)),
+                    "--mixed_precision",
+                    training.get("mixed_precision", "fp16"),
+                    "--gradient_accumulation_steps",
+                    str(training.get("gradient_accumulation_steps", 4)),
+                    "--language",
+                    training.get("language", "zh"),
+                    "--task",
+                    training.get("task", "transcribe"),
+                    "--max_new_tokens",
+                    str(training.get("max_new_tokens", 256)),
+                    "--no_repeat_ngram_size",
+                    str(training.get("no_repeat_ngram_size", 3)),
+                    "--length_penalty",
+                    str(training.get("length_penalty", 1.2)),
+                    "--eval_metric",
+                    training.get("eval_metric", "cer"),
+                    "--repetition_penalty",
+                    str(training.get("repetition_penalty", 2.0)),
+                ]
+
+                # 添加可选训练超参
+                if "learning_rate" in training:
+                    train_cmd.extend(
+                        ["--learning_rate", str(training["learning_rate"])]
+                    )
+                if "warmup_steps" in training:
+                    train_cmd.extend(
+                        ["--warmup_steps", str(training["warmup_steps"])]
+                    )
+                if "weight_decay" in training:
+                    train_cmd.extend(
+                        ["--weight_decay", str(training["weight_decay"])]
+                    )
+                if "lora_r" in training:
+                    train_cmd.extend(["--lora_r", str(training["lora_r"])])
+                if "lora_alpha" in training:
+                    train_cmd.extend(
+                        ["--lora_alpha", str(training["lora_alpha"])]
+                    )
+                if "lora_dropout" in training:
+                    train_cmd.extend(
+                        ["--lora_dropout", str(training["lora_dropout"])]
+                    )
+                if "target_modules" in training:
+                    train_cmd.extend(
+                        ["--target_modules", training["target_modules"]]
+                    )
+                if training.get("gradient_checkpointing", False):
+                    train_cmd.append("--gradient_checkpointing")
+                if (
+                    "checkpoint_steps" in training
+                    and training["checkpoint_steps"]
+                ):
+                    train_cmd.extend(
+                        [
+                            "--checkpoint_steps",
+                            str(training["checkpoint_steps"]),
+                        ]
+                    )
+                if "checkpoint_epochs" in training:
+                    train_cmd.extend(
+                        [
+                            "--checkpoint_epochs",
+                            str(training["checkpoint_epochs"]),
+                        ]
+                    )
+                if "early_stopping_patience" in training:
+                    train_cmd.extend(
+                        [
+                            "--early_stopping_patience",
+                            str(training["early_stopping_patience"]),
+                        ]
+                    )
+                if "early_stopping_threshold" in training:
+                    train_cmd.extend(
+                        [
+                            "--early_stopping_threshold",
+                            str(training["early_stopping_threshold"]),
+                        ]
+                    )
+                if training.get("save_merged_model", False):
+                    train_cmd.append("--save_merged_model")
+
+                run_step("模型训练", train_cmd, logger)
+
+                # 5. 模型评估
+                eval_cmd = [
+                    sys.executable,
+                    os.path.join(base, "evaluator.py"),
                     "--model_dir",
                     model_dir,
-                    "--output_dir",
-                    ggml_dir,
-                    "--use_h5_to_ggml",
-                ],
-                logger,
-            )
+                    "--test_manifest",
+                    test_csv,
+                    "--output_file",
+                    os.path.join(manifest_dir, "eval_results.txt"),
+                    "--metric",
+                    training.get("eval_metric", "cer"),
+                    "--language",
+                    training.get("language", "zh"),
+                    "--task",
+                    training.get("task", "transcribe"),
+                ]
+                # 传递基础模型路径（用于 LoRA 模型合并）
+                if "model_name_or_path" in training:
+                    eval_cmd.extend(
+                        [
+                            "--base_model_path",
+                            training["model_name_or_path"],
+                        ]
+                    )
+                run_step("模型评估", eval_cmd, logger)
 
-            # 重命名 GGML 模型文件为 原始模型名-日期-finetune.bin
-            logger.info("开始重命名 GGML 模型文件...")
-            orig_model = os.path.basename(os.path.normpath(model_dir))
-            date_str = datetime.datetime.now().strftime("%Y%m%d")
-            new_name = f"{orig_model}-{date_str}-finetune.bin"
-            # 查找输出目录下的 bin 文件
-            bin_files = glob.glob(os.path.join(ggml_dir, "*.bin"))
-            if bin_files:
-                old_path = bin_files[0]
-                new_path = os.path.join(ggml_dir, new_name)
-                os.rename(old_path, new_path)
-                logger.info(
-                    f"已将 {os.path.basename(old_path)} 重命名为 {new_name}"
+                # 6. 转换 GGML
+                # 使用 H5 转换脚本进行 GGML 模型转换
+                run_step(
+                    "模型转换",
+                    [
+                        sys.executable,
+                        os.path.join(base, "converter.py"),
+                        "--model_dir",
+                        model_dir,
+                        "--output_dir",
+                        ggml_dir,
+                        "--use_h5_to_ggml",
+                    ],
+                    logger,
                 )
-            else:
-                logger.warning("未找到需要重命名的 GGML bin 文件")
 
-            logger.info("=" * 60)
-            logger.info(f"第 {iteration_count} 轮迭代完成")
-            logger.info("=" * 60)
+                # 重命名 GGML 模型文件为 原始模型名-日期-finetune.bin
+                logger.info("开始重命名 GGML 模型文件...")
+                orig_model = os.path.basename(os.path.normpath(model_dir))
+                date_str = datetime.datetime.now().strftime("%Y%m%d")
+                new_name = f"{orig_model}-{date_str}-finetune.bin"
+                # 查找输出目录下的 bin 文件
+                bin_files = glob.glob(os.path.join(ggml_dir, "*.bin"))
+                if bin_files:
+                    old_path = bin_files[0]
+                    new_path = os.path.join(ggml_dir, new_name)
+                    os.rename(old_path, new_path)
+                    logger.info(
+                        f"已将 {os.path.basename(old_path)} 重命名为 {new_name}"
+                    )
+                else:
+                    logger.warning("未找到需要重命名的 GGML bin 文件")
 
-        except KeyboardInterrupt:
-            logger.info("\n收到中断信号，正在退出...")
-            sys.exit(0)
-        except Exception as e:
-            # 打印详细错误信息以便排查
-            error_msg = f"迭代管道出现错误: {e}"
-            logger.error(error_msg)
-            logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
-            logger.info("等待下次周期继续...")
+                logger.info("=" * 60)
+                logger.info(f"第 {iteration_count} 轮迭代完成")
+                logger.info("=" * 60)
 
-        if once:
-            # 在 once 模式下，删除训练模型输出目录
-            try:
-                shutil.rmtree(model_dir)
-                logger.info(f"已移除模型输出目录: {model_dir}")
+            except KeyboardInterrupt:
+                logger.info("\n收到中断信号，正在退出...")
+                sys.exit(0)
             except Exception as e:
-                logger.warning(f"移除模型目录失败: {e}")
-            logger.info("已启用 once 模式，执行一次后退出")
-            break
+                # 打印详细错误信息以便排查
+                error_msg = f"迭代管道出现错误: {e}"
+                logger.error(error_msg)
+                logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
+                logger.info("等待下次周期继续...")
 
-        logger.info(f"等待 {interval} 秒后开始下一轮迭代...\n")
-        time.sleep(interval)
+            if once:
+                logger.info("已启用 once 模式，执行一次后退出")
+                break
+
+            logger.info(f"等待 {interval} 秒后开始下一轮迭代...\n")
+            time.sleep(interval)

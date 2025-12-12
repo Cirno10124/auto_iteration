@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, List
 
 import jiwer
@@ -680,6 +681,26 @@ def main():
     unwrapped_model.save_pretrained(args.output_dir)
     processor.save_pretrained(args.output_dir)
     logger.info(f"最终模型已保存到 {args.output_dir}")
+    # 为模型打标签并保存元数据
+    try:
+        metadata = {
+            "model_name_or_path": args.model_name_or_path,
+            "train_manifest": args.train_manifest,
+            "eval_manifest": args.eval_manifest,
+            "test_manifest": args.test_manifest,
+            "num_train_epochs": args.num_train_epochs,
+            "train_batch_size": args.train_batch_size,
+            "learning_rate": args.learning_rate,
+            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        metadata_path = os.path.join(
+            args.output_dir, "model_metadata.json"
+        )
+        with open(metadata_path, "w", encoding="utf-8") as mf:
+            json.dump(metadata, mf, ensure_ascii=False, indent=2)
+        logger.info(f"模型元数据已保存到 {metadata_path}")
+    except Exception as e:
+        logger.warning(f"保存模型元数据失败: {e}")
 
     # 保存合并后的模型
     if args.save_merged_model:

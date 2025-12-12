@@ -146,8 +146,8 @@ def main():
             train_size = 0
         # 划分数据
         train_pairs = pairs[:train_size]
-        val_pairs = pairs[train_size:train_size + val_size]
-        test_pairs = pairs[train_size + val_size:]
+        val_pairs = pairs[train_size : train_size + val_size]
+        test_pairs = pairs[train_size + val_size :]
 
         # 将 (audio_path, label_path) 转换为 (audio_path, text)
         def load_text_from_pairs(pair_list):
