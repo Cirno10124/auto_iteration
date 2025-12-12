@@ -1,66 +1,28 @@
-// 示例：Orchestrator 配置文件 (JSONC，可在字段下方查看说明)
 {
-  // 路径配置：指定各阶段输出目录
   "paths": {
-    // 原始长音频目录，若提供则自动分段
     "raw_audio_dir": "tests/test_audio",
-
-    // 可选：自定义切分脚本路径；为空时使用默认 split_audio.py
     "split_script": "",
-
-    // 分段后的音频输出目录
     "audio_dir": "audio_chunks",
-
-    // 标注结果输出目录
     "labels_dir": "labels",
-
-    // 清单（manifests）输出目录
     "manifest_dir": "manifests",
-
-    // LoRA 训练输出目录
     "model_dir": "out/model",
-
-    // GGML 模型输出目录
-    "ggml_dir": "ggml_model",
-
-    /* 说话人映射：key=说话人ID, value=原始音频目录 */
-    "speakers": {
-      "speaker_01": "tests/test_audio/speaker_01",
-      "speaker_02": "tests/test_audio/speaker_02"
-    }
+    "ggml_dir": "ggml_model"
   },
-
-  /* 音频切分参数：对 raw_audio_dir 中文件执行 VAD 分段 */
   "audio_split": {
-    // 采样率（Hz）
     "sample_rate": 16000,
-    // 每帧时长（ms）
     "frame_duration": 30,
-    // VAD 激进程度 0-3
     "vad_aggressiveness": 2,
-    // 最短分段时长 (ms)
     "min_segment_duration": 1500,
-    // 合并窗口阈值 (")
     "merge_threshold": 15
   },
-
-  // 标注配置：调用 labeler.py
   "labeling": {
-    // Whisper 模型路径或名称，例如 Hugging Face ID
     "model_name_or_path": "openai/whisper-large-v3-turbo",
-    // 标注时跳过高压缩率样本阈值
     "compression_ratio_threshold": 1.35,
-    // 标注时跳过低对数概率样本阈值
     "logprob_threshold": -1.0,
-    // 最多标注样本条数 (<=0 表示不限制)
     "max_samples": 100,
-    // 生成温度 (temperature)
     "temperature": 1.0,
-    // 设备编号，-1 表示 CPU；>=0 为 GPU 设备索引
     "device": 0
   },
-
-  // 训练配置：调用 train_lora.py
   "training": {
     "model_name_or_path": "openai/whisper-large-v3-turbo",
     "num_train_epochs": 3,
@@ -74,36 +36,23 @@
     "no_repeat_ngram_size": 3,
     "length_penalty": 1.2,
     "eval_metric": "cer",
-    "repetition_penalty": 2.0,
-    // 可选：学习率、warmup_steps、weight_decay 等自动超参搜索时使用
-    // "learning_rate": 1e-4,
-    // "warmup_steps": 500,
-    // "weight_decay": 0.01
+    "repetition_penalty": 2.0
   },
-
-  /* 迭代控制：自迭代主循环 */
   "iteration": {
-    // 轮次间隔 (秒)
     "interval": 86400,
-    // true=仅执行一次后退出
     "once": false,
-    // test_size>0 时截断清单到固定条数
     "test_size": 0,
-    // 抽取标签用于人工标注的比率
     "annotation_ratio": 0.0,
-    // 跳过清单构建
     "skip_manifest": false,
-    // 标注后即退出
     "stop_after_labels": false
   },
-
-  // 日志配置
+  "speakers": {
+    "speaker_01": "tests/test_audio/speaker_01",
+    "speaker_02": "tests/test_audio/speaker_02"
+  },
   "logging": {
-    // 日志输出目录
     "log_dir": "logs",
-    // 日志级别: DEBUG/INFO/WARNING/ERROR
     "log_level": "INFO",
-    // 日志文件前缀
     "log_file_prefix": "orchestrator"
   }
 }

@@ -2,14 +2,15 @@
 
 本模块提供一套端到端自动化迭代流水线，用于：
 
-1. 对原始长音频进行 VAD 分段（split_audio.py）  
-2. 调用 Whisper 模型自动标注（labeler.py）  
-3. 构建训练/验证/测试清单（dataset_manager.py）  
-4. 对模型进行 LoRA 微调训练（train_lora.py）  
-5. 评估模型性能并保存最佳权重（evaluator.py）  
-6. 可选将模型转换为 GGML 格式（converter.py）  
+1. 从音频源获取原始音频并分离说话人存储
+2. 对原始长音频进行 VAD 分段（split_audio.py）  
+3. 调用 Whisper 模型(或训练后的模型)自动标注（labeler.py）  
+4. 构建训练/验证/测试清单（dataset_manager.py）  
+5. 对模型进行 LoRA 微调训练（train_lora.py）  
+6. 评估模型性能并保存最佳权重（evaluator.py）  
+7. 可选将模型转换为 GGML 格式（converter.py）  
 
-所有步骤由 `orchestrator.py` 统一调用，可配置、可覆盖、可多说话人并行。
+所有步骤由 `orchestrator.py` 统一调用，可配置、可覆盖、可多说话人并行（需要硬件支持）。
 
 ---
 
@@ -29,12 +30,12 @@ auto_iteration/
 
 ## 前置要求
 
-- Python 3.8+  
+- Python 3.8+（3.11版本最佳）  
 - 安装依赖：
   ```bash
   pip install -r requirements.txt
   ```
-- CUDA GPU（可选，用于加速标注和训练）
+- CUDA GPU（训练必需）
 - 可选：安装 `ffmpeg`、`sox` 等工具以支持更多音频格式
 
 ## 配置说明
@@ -66,18 +67,19 @@ auto_iteration/
 
 ## 脚本概要
 
+- **audio_collector.py**：实时音频采集并进行说话人分离
 - **split_audio.py**：基于 VAD 切分长音频到指定目录
 - **labeler.py**：调用 Hugging Face Whisper 进行自动标注
 - **dataset_manager.py**：扫描标注结果，生成 CSV 清单并支持抽样
 - **train_lora.py**：使用 PEFT 和 LoRA 对模型微调，支持 early stopping
-- **evaluator.py**：基于 `jiwer` 计算 WER/CER
+- **evaluator.py**：基于 `jiwer` 计算 WER/CER，并生成报告
 - **converter.py**：将训练后的模型转为 GGML 格式
 
 ## 日志与模型管理
 
 - 日志文件输出到配置指定目录  
-- 每轮训练会保存 `best_model/`，可作为下一轮增量训练输入
-- `model_metadata.json` 会记录超参与训练信息，方便追踪
+- 每轮训练会为该说话人保存 `best_model/xxx`，可作为下一轮增量训练输入
+- `model_metadata.json` 会记录超参和训练信息，方便追踪
 
 ---
 
