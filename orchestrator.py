@@ -404,7 +404,7 @@ if __name__ == "__main__":
 
                 # 1. 自动标注：始终调用，让 labeler.py 自行跳过已标注文件
                 # 支持使用微调后的模型进行标注（自迭代功能）
-                max_samples = labeling.get("max_samples", 100)
+                max_samples = 0 # 不限制标注样本数
                 temperature = labeling.get("temperature", 1.0)
                 # 支持指定设备，-1 表示 CPU，>=0 表示 GPU 设备编号
                 device = labeling.get("device", -1)
@@ -441,8 +441,8 @@ if __name__ == "__main__":
                         compression_ratio_threshold,
                         "--logprob_threshold",
                         logprob_threshold,
-                        "--max_samples",
-                        str(max_samples),
+                         "--max_samples",
+                         str(max_samples),
                         "--temperature",
                         str(temperature),
                     ],
@@ -725,6 +725,40 @@ if __name__ == "__main__":
                         ]
                     )
                 run_step("模型评估", eval_cmd, logger)
+
+                # 基线评估：评估上一轮模型或基准模型
+                baseline_eval_file = os.path.join(manifest_dir, "eval_baseline.txt")
+                base_model_path = prev_model if prev_model else training.get("model_name_or_path")
+                base_eval_cmd = [
+                    sys.executable,
+                    os.path.join(base, "evaluator.py"),
+                    "--model_dir", base_model_path,
+                    "--test_manifest", test_csv,
+                    "--output_file", baseline_eval_file,
+                    "--metric", training.get("eval_metric", "cer"),
+                    "--language", training.get("language", "zh"),
+                    "--task", training.get("task", "transcribe"),
+                ]
+                run_step("基线评估", base_eval_cmd, logger)
+
+                # 解析并比较基线与微调后指标
+                def parse_metric(file_path):
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            for line in f:
+                                if line.startswith(f"{training.get('eval_metric', 'cer').upper()}: "):
+                                    return float(line.split(":")[1].strip())
+                    except Exception:
+                        return None
+                baseline_metric = parse_metric(baseline_eval_file)
+                tuned_metric = parse_metric(os.path.join(manifest_dir, "eval_results.txt"))
+                logger.info(f"基线指标: {baseline_metric}, 微调后指标: {tuned_metric}")
+                # 只有当微调后指标优于基线时才进行模型转换
+                if tuned_metric is None or baseline_metric is None or tuned_metric <= baseline_metric:
+                    logger.info("微调后指标未优于基线，跳过模型转换，进入下一轮迭代")
+                    continue
+
+                # 6. 转换 GGML
 
                 # 6. 转换 GGML
                 # 使用 H5 转换脚本进行 GGML 模型转换

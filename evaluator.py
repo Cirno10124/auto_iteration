@@ -268,6 +268,14 @@ if __name__ == "__main__":
         logger.error(f"模型目录不存在: {args.model_dir}")
         exit(1)
 
+    # 优先使用上一轮最佳 LoRA 模型（best_model），如果不存在再依次查找
+    best_model_dir = os.path.join(args.model_dir, "best_model")
+    if os.path.isdir(best_model_dir):
+        logger.info(f"检测到上一轮最佳模型: {best_model_dir}，将用于评估")
+        # 保存原始 model_dir 作为 base_model_path
+        args.base_model_path = args.model_dir
+        args.model_dir = best_model_dir
+
     # 查找模型路径
     model_path, base_model_path, is_merged = find_model_path(
         args.model_dir, logger

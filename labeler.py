@@ -71,10 +71,13 @@ def main():
     parser.add_argument(
         "--max_samples",
         type=int,
-        default=100,
-        help="测试模式下最大标注音频数，<=0 则不限制，默认为100",
+        default=None,
+        help="测试模式下最大标注音频数，不提供则默认100，<=0 则不限制",
     )
     args = parser.parse_args()
+    # 未提供 max_samples 时，默认限制为100条
+    if args.max_samples is None:
+        args.max_samples = 100
 
     logger = setup_logging()
 

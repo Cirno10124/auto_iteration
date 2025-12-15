@@ -7,8 +7,7 @@ import sys
 import numpy as np
 import scipy.io.wavfile as wavfile
 import sounddevice as sd
-from pyannote.audio import Pipeline
-from pyannote.audio.pipelines import SpeakerSeparation  # 添加分离模型导入
+from auto_iteration.speaker_separator import SpeakerSeparator
 
 # 全局标志变量，用于控制循环退出
 should_exit = False
@@ -93,7 +92,7 @@ def collect_audio(chunk_duration, output_dir, sample_rate, channels):
             # 说话人分离（源分离）
             if sep_pipeline:
                 try:
-                    separated = sep_pipeline(filename)
+                    separated = separator.separate_sources(filename)
                     for channel, audio in separated.items():
                         sep_dir = os.path.join(output_dir, "separated")
                         os.makedirs(sep_dir, exist_ok=True)
@@ -112,7 +111,7 @@ def collect_audio(chunk_duration, output_dir, sample_rate, channels):
 
             # 说话人分离
             try:
-                diarization = pipeline(filename)
+                diarization = separator.diarize(filename)
             except Exception as e:
                 print(f"错误：说话人分离失败: {e}")
                 print("跳过当前片段的说话人分离，继续下一个...")
