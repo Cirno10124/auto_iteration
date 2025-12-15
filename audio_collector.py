@@ -7,6 +7,7 @@ import sys
 import numpy as np
 import scipy.io.wavfile as wavfile
 import sounddevice as sd
+
 from auto_iteration.speaker_separator import SpeakerSeparator
 
 # 全局标志变量，用于控制循环退出
@@ -32,27 +33,7 @@ def collect_audio(chunk_duration, output_dir, sample_rate, channels):
         print(f"错误：无法创建输出目录 '{output_dir}': {e}")
         sys.exit(1)
 
-    try:
-        print("正在加载 pyannote.audio 说话人分离模型...")
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization", revision="main", token=True
-        )
-        pipeline.to("cuda")
-        print("模型加载完成")
-        # 加载源分离模型
-        try:
-            sep_pipeline = SpeakerSeparation.from_pretrained(
-                "pyannote/source-separation", revision="main", token=True
-            )
-            sep_pipeline.to("cuda")
-            print("源分离模型加载完成")
-        except Exception as e:
-            print(f"警告：无法加载源分离模型: {e}")
-            sep_pipeline = None
-    except Exception as e:
-        print(f"错误：无法加载 pyannote.audio 模型: {e}")
-        print("请检查：1) Hugging Face token 是否正确设置；2) 网络连接是否正常；3) CUDA 是否可用")
-        sys.exit(1)
+    separator = SpeakerSeparator()
 
     speaker_counters = {}
     index = 1
@@ -90,9 +71,10 @@ def collect_audio(chunk_duration, output_dir, sample_rate, channels):
                 continue
 
             # 说话人分离（源分离）
-            if sep_pipeline:
+            sources = separator.separate_sources(filename)
+            if sources:
                 try:
-                    separated = separator.separate_sources(filename)
+                    separated = sources
                     for channel, audio in separated.items():
                         sep_dir = os.path.join(output_dir, "separated")
                         os.makedirs(sep_dir, exist_ok=True)
