@@ -1,0 +1,6 @@
+{
+  "model_revision": "pyannote/speaker-diarization@2.1",
+  "hf_token": "your_token_here",
+  "device": "cuda",
+  "snr_threshold": 20
+}
