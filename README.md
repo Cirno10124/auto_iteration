@@ -83,4 +83,27 @@ auto_iteration/
 
 ---
 
+---
+
+## 说话人聚类 (cluster_speakers)
+
+`SpeakerSeparator` 提供 `cluster_speakers(audio_file: str, threshold: float = 0.75)` 方法：
+
+- `audio_file`：音频文件路径
+- `threshold`：距离阈值（余弦距离），越小聚类越保守
+- 返回：字典 `{cluster_id: [(start, end), ...], ...}`
+
+示例：
+
+```python
+from auto_iteration.speaker_separator import SpeakerSeparator
+
+sep = SpeakerSeparator(device="cpu")
+clusters = sep.cluster_speakers("path/to/audio.wav", threshold=0.6)
+for cid, segments in clusters.items():
+    print(f"簇{cid}: {segments}")
+```
+
+---
+
 欢迎提 issue 和 PR，以优化功能和增强可用性。
