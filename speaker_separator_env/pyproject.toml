@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speaker-separator-env"
+version = "0.1.0"
+description = "Standalone environment/package for pyannote speaker diarization + optional clustering."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy==2.3.3",
+  "soundfile==0.13.1",
+  "scikit-learn==1.7.2",
+  "pyannote-audio==4.0.1",
+  "librosa>=0.10.2.post1",
+  "noisereduce>=3.0.2",
+  "torch==2.9.0",
+  "torchaudio==2.9.0",
+]
+
+[project.scripts]
+speaker-separator = "speaker_separator_env.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+

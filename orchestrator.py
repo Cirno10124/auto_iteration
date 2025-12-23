@@ -131,6 +131,52 @@ def load_config(config_path, logger=None):
 
         cleaned_content = remove_block_comments(cleaned_content)
 
+        # 移除尾随逗号：JSONC 常见写法允许在 '}' / ']' 前写逗号，但 json.loads 不允许。
+        # 这里在不进入字符串的前提下，删除紧挨着闭合符前的 ','。
+        def remove_trailing_commas(text: str) -> str:
+            out = []
+            i = 0
+            in_string = False
+            escape_next = False
+            n = len(text)
+
+            while i < n:
+                ch = text[i]
+
+                if escape_next:
+                    out.append(ch)
+                    escape_next = False
+                    i += 1
+                    continue
+
+                if ch == "\\":
+                    out.append(ch)
+                    escape_next = True
+                    i += 1
+                    continue
+
+                if ch == '"':
+                    out.append(ch)
+                    in_string = not in_string
+                    i += 1
+                    continue
+
+                if not in_string and ch == ",":
+                    # 预读下一个非空白字符，若是 '}' 或 ']' 则跳过该逗号
+                    j = i + 1
+                    while j < n and text[j] in " \t\r\n":
+                        j += 1
+                    if j < n and text[j] in "}]":
+                        i += 1
+                        continue
+
+                out.append(ch)
+                i += 1
+
+            return "".join(out)
+
+        cleaned_content = remove_trailing_commas(cleaned_content)
+
         # 解析 JSON
         config = json.loads(cleaned_content)
 
@@ -295,6 +341,8 @@ if __name__ == "__main__":
 
     interval = iteration.get("interval", 86400)
     once = iteration.get("once", False)
+    # 可选：限制最大迭代轮数（用于测试或批处理）。<=0 表示不限制
+    max_iterations = int(iteration.get("max_iterations", 0) or 0)
     test_size = iteration.get("test_size", 0)
     annotation_ratio = iteration.get("annotation_ratio", 0.0)
     skip_manifest = iteration.get("skip_manifest", False)
@@ -302,6 +350,22 @@ if __name__ == "__main__":
 
     # 获取脚本目录
     base = os.path.dirname(__file__)
+    # 允许通过配置覆盖各阶段脚本路径（便于测试注入 stub 脚本）
+    labeler_script = paths.get("labeler_script") or os.path.join(
+        base, "labeler.py"
+    )
+    dataset_manager_script = paths.get(
+        "dataset_manager_script"
+    ) or os.path.join(base, "dataset_manager.py")
+    train_script = paths.get("train_script") or os.path.join(
+        base, "train_lora.py"
+    )
+    evaluator_script = paths.get("evaluator_script") or os.path.join(
+        base, "evaluator.py"
+    )
+    converter_script = paths.get("converter_script") or os.path.join(
+        base, "converter.py"
+    )
     # 默认切分脚本路径
     if not split_script:
         # 假设 split_audio.py 与 orchestrator.py 同级或指定目录内
@@ -342,6 +406,12 @@ if __name__ == "__main__":
         os.makedirs(model_dir, exist_ok=True)
         os.makedirs(ggml_dir, exist_ok=True)
         while True:
+            # 在每轮开始前检查是否达到最大迭代次数（避免 continue 跳过底部检查）
+            if max_iterations > 0 and iteration_count >= max_iterations:
+                logger.info(
+                    f"已达到 max_iterations={max_iterations}，退出迭代循环"
+                )
+                break
             iteration_count += 1
             logger.info("=" * 60)
             logger.info(f"开始第 {iteration_count} 轮迭代")
@@ -428,7 +498,7 @@ if __name__ == "__main__":
                     "标签生成",
                     [
                         sys.executable,
-                        os.path.join(base, "labeler.py"),
+                        labeler_script,
                         "--audio_dir",
                         audio_dir,
                         "--labels_dir",
@@ -457,7 +527,7 @@ if __name__ == "__main__":
                         "清单构建",
                         [
                             sys.executable,
-                            os.path.join(base, "dataset_manager.py"),
+                            dataset_manager_script,
                             "--audio_dir",
                             audio_dir,
                             "--labels_dir",
@@ -592,7 +662,7 @@ if __name__ == "__main__":
                 # 构建训练命令，使用配置文件中的训练超参
                 train_cmd = [
                     sys.executable,
-                    os.path.join(base, "train_lora.py"),
+                    train_script,
                     "--train_manifest",
                     train_csv,
                     "--eval_manifest",
@@ -702,7 +772,7 @@ if __name__ == "__main__":
                 # 5. 模型评估
                 eval_cmd = [
                     sys.executable,
-                    os.path.join(base, "evaluator.py"),
+                    evaluator_script,
                     "--model_dir",
                     model_dir,
                     "--test_manifest",
@@ -737,7 +807,7 @@ if __name__ == "__main__":
                 )
                 base_eval_cmd = [
                     sys.executable,
-                    os.path.join(base, "evaluator.py"),
+                    evaluator_script,
                     "--model_dir",
                     base_model_path,
                     "--test_manifest",
@@ -791,7 +861,7 @@ if __name__ == "__main__":
                     "模型转换",
                     [
                         sys.executable,
-                        os.path.join(base, "converter.py"),
+                        converter_script,
                         "--model_dir",
                         model_dir,
                         "--output_dir",

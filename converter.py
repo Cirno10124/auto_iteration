@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import glob
 import logging
 import os
 import shutil
@@ -124,7 +125,7 @@ def main():
     # 验证 whisper.cpp 仓库路径
     repo_dir = args.whisper_cpp_repo
     if not os.path.exists(repo_dir):
-        alt_repo = os.path.join(script_dir, args.whisper_cpp_repo + ".cpp")
+        alt_repo = os.path.join(script_dir, args.whisper_cpp_repo)
         if os.path.exists(alt_repo):
             repo_dir = alt_repo
     if not os.path.exists(repo_dir):
@@ -164,64 +165,42 @@ def main():
         )
         peft_model = PeftModel.from_pretrained(base_model, model_dir)
         merged_model = peft_model.merge_and_unload()
-        merged_model.save_pretrained(model_dir)
+        # 关键：强制保存为单个 pytorch_model.bin（避免默认 safetensors / 分片导致后续找不到文件）
+        merged_model.save_pretrained(
+            model_dir, safe_serialization=False, max_shard_size="10GB"
+        )
         model_bin = os.path.join(model_dir, "pytorch_model.bin")
-        logger.info(f"LoRA 合并完成，已保存 {model_bin}")
+        if not os.path.exists(model_bin):
+            # 兜底：某些环境仍可能保存成别名或分片，这里尽量定位并复制/合并为单文件
+            cand = glob.glob(os.path.join(model_dir, "pytorch_model*.bin"))
+            if cand:
+                # 选最像主权重的那个
+                cand.sort()
+                shutil.copy2(cand[0], model_bin)
+            else:
+                # 最后兜底：直接 state_dict 导出
+                import torch
+
+                torch.save(merged_model.state_dict(), model_bin)
+        if not os.path.exists(model_bin):
+            raise FileNotFoundError(model_bin)
+        logger.info(f"LoRA 合并完成，已生成 {model_bin}")
     except Exception as e:
         logger.error(f"合并 LoRA 权重失败: {e}")
         import traceback
 
         logger.error(f"错误堆栈:\n{traceback.format_exc()}")
         sys.exit(1)
-    # 手动合并任何残留的 LoRA 权重
+    # 说明：merge_and_unload() 已完成合并。这里不再做“手动合并残留 LoRA”这类高风险操作，
+    # 只做轻量自检：确保生成的权重文件可被加载（便于尽早暴露损坏/路径问题）。
     try:
-        import json
-
         import torch
 
-        state = torch.load(model_bin)
-        # 尝试加载 LoRA 配置以获取 scaling
-        alpha = None
-        cfg_path = os.path.join(model_dir, "adapter_config.json")
-        if os.path.exists(cfg_path):
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-                alpha = cfg.get("alpha", None)
-        # 查找并合并 LoRA A/B 权重
-        lora_A_keys = [k for k in state if k.endswith("lora_A.default")]
-        for a_key in lora_A_keys:
-            prefix = a_key[: -len(".lora_A.default")]
-            b_key = prefix + ".lora_B.default"
-            if b_key not in state:
-                continue
-            A = state[a_key]
-            B = state[b_key]
-            rank = A.shape[0]
-            scaling = alpha / rank if alpha else 1.0
-            delta = (B @ A) * scaling
-            # 合并到基础权重
-            if prefix in state:
-                state[prefix] = state[prefix] + delta
-            # 删除 LoRA keys
-            del state[a_key]
-            del state[b_key]
-        torch.save(state, model_bin)
-        logger.info("手动合并 LoRA 残留权重完成：仅剩基础模型权重可转换。")
-        # 删除原始 safetensors 或 adapter 配置，强制使用 binary 权重
-        # 注意：这些文件已经在之前备份过了
-        for fname in ["model.safetensors", "adapter_config.json"]:
-            path_f = os.path.join(model_dir, fname)
-            if os.path.exists(path_f):
-                try:
-                    os.remove(path_f)
-                    logger.info(f"已移除 {path_f}，确保仅加载合并后二进制权重")
-                except Exception as e:
-                    logger.warning(f"删除文件失败 {path_f}: {e}")
+        _ = torch.load(model_bin, map_location="cpu")
     except Exception as e:
-        logger.warning(f"手动合并 LoRA 权重失败，将继续使用原模型权重。错误: {e}")
-        import traceback
-
-        logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
+        logger.warning(
+            f"合并后的权重文件无法加载（{model_bin}），后续转换很可能失败。错误: {e}"
+        )
 
     # 选择转换脚本路径
     if args.use_h5_to_ggml:
@@ -254,11 +233,15 @@ def main():
         if backup_dir:
             logger.info(f"原始模型文件已备份到: {backup_dir}")
     else:
+        out = result.stdout.decode(errors="ignore")
         err = result.stderr.decode(errors="ignore")
         logger.warning(
             f"convert-h5-to-ggml.py 脚本失败，错误代码 {result.returncode}，尝试回退到 convert-pt-to-ggml.py"
         )
-        logger.debug(f"错误详情:\n{err}")
+        if out.strip():
+            logger.debug(f"stdout:\n{out}")
+        if err.strip():
+            logger.debug(f"stderr:\n{err}")
         # 回退到 convert-pt-to-ggml.py
         fallback_script = os.path.join(
             repo_dir, "models", "convert-pt-to-ggml.py"
@@ -266,11 +249,16 @@ def main():
         if not os.path.exists(fallback_script):
             logger.error(f"缺少回退脚本: {fallback_script}")
             sys.exit(1)
+        if not os.path.exists(model_bin):
+            logger.error(
+                f"回退转换需要权重文件，但未找到 {model_bin}（请检查合并/保存步骤是否成功）"
+            )
+            sys.exit(1)
         fallback_cmd = [
             sys.executable,
             fallback_script,
             model_bin,
-            args.hf_whisper_repo,
+            hf_repo,
             args.output_dir,
         ]
         if args.use_f32:
@@ -284,11 +272,15 @@ def main():
             if backup_dir:
                 logger.info(f"原始模型文件已备份到: {backup_dir}")
         else:
+            fout = fallback_result.stdout.decode(errors="ignore")
             ferr = fallback_result.stderr.decode(errors="ignore")
             logger.error(
                 f"回退转换失败: return code {fallback_result.returncode}"
             )
-            logger.error(f"错误详情:\n{ferr}")
+            if fout.strip():
+                logger.error(f"stdout:\n{fout}")
+            if ferr.strip():
+                logger.error(f"stderr:\n{ferr}")
             sys.exit(1)
 
     logger.info("=" * 60)
