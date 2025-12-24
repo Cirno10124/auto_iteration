@@ -8,6 +8,7 @@ try:
     import torchaudio  # noqa: E0401
 
     if not hasattr(torchaudio, "list_audio_backends"):
+
         def _list_audio_backends():
             # 尽量返回一个合理的后端列表；speechbrain 主要是用它做可用性检查
             return ["soundfile"]
@@ -16,12 +17,14 @@ try:
 
     # 部分库还会调用 torchaudio.get_audio_backend / set_audio_backend
     if not hasattr(torchaudio, "get_audio_backend"):
+
         def _get_audio_backend():
             return "soundfile"
 
         torchaudio.get_audio_backend = _get_audio_backend  # type: ignore[attr-defined]
 
     if not hasattr(torchaudio, "set_audio_backend"):
+
         def _set_audio_backend(_backend: str):
             # torchaudio>=2.9 移除了旧后端选择机制，这里做兼容 no-op
             return None
@@ -38,6 +41,7 @@ import torch  # noqa: E0401
 from pyannote.audio import Pipeline  # noqa: E0401
 from sklearn.cluster import AgglomerativeClustering
 
+
 # 占位 embedding 推断器，当初始化失败时使用
 class DummyEmbedder:
     """
@@ -49,6 +53,7 @@ class DummyEmbedder:
         inference = Inference(model)
         inference.crop("file.wav", Segment(start=2.0, end=5.0))
     """
+
     def __init__(
         self,
         hf_token=None,
@@ -102,7 +107,9 @@ class DummyEmbedder:
 
         # SpeechBrain ECAPA 通常使用 16kHz。若采样率不同，尽量重采样以提升稳定性。
         if sr != 16000:
-            segment = librosa.resample(segment.astype(_np.float32), orig_sr=sr, target_sr=16000)
+            segment = librosa.resample(
+                segment.astype(_np.float32), orig_sr=sr, target_sr=16000
+            )
             sr = 16000
         else:
             segment = segment.astype(_np.float32, copy=False)
@@ -121,7 +128,11 @@ class DummyEmbedder:
                 segment = _np.tile(segment, reps)[:min_samples]
 
         # (1, 1, num_samples)
-        waveforms = torch.from_numpy(segment.astype(_np.float32)).unsqueeze(0).unsqueeze(0)
+        waveforms = (
+            torch.from_numpy(segment.astype(_np.float32))
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
         embeddings = self._embedder(waveforms)
         # 返回 1D 向量，供上层 np.stack
         return _np.asarray(embeddings).reshape(-1)
@@ -163,7 +174,9 @@ class SpeakerSeparator:
         self.device = device
         self.hf_token = hf_token
         # 延迟加载 embedding 推断器，cluster_speakers 时再初始化
-        self.embedder = DummyEmbedder(hf_token=self.hf_token, device=self.device)
+        self.embedder = DummyEmbedder(
+            hf_token=self.hf_token, device=self.device
+        )
 
         # 加载说话人分离模型
         print("正在加载 pyannote.audio 说话人分离模型...")

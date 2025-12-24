@@ -33,11 +33,11 @@ def main():
             if not fn.lower().endswith((".wav", ".flac", ".mp3")):
                 continue
             base = os.path.splitext(fn)[0]
-            with open(os.path.join(out_dir, base + ".txt"), "w", encoding="utf-8") as out:
+            with open(
+                os.path.join(out_dir, base + ".txt"), "w", encoding="utf-8"
+            ) as out:
                 out.write("dummy\n")
 
 
 if __name__ == "__main__":
     main()
-
-

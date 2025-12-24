@@ -9,4 +9,7 @@
 这个文件仅为兼容旧代码 `from speaker_separator import ...` 的导入路径。
 """
 
-from speaker_separator_env.speaker_separator import DummyEmbedder, SpeakerSeparator  # noqa: F401
+from speaker_separator_env.speaker_separator import (  # noqa: F401
+    DummyEmbedder,
+    SpeakerSeparator,
+)

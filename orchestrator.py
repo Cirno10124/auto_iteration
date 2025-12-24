@@ -408,9 +408,7 @@ if __name__ == "__main__":
         while True:
             # 在每轮开始前检查是否达到最大迭代次数（避免 continue 跳过底部检查）
             if max_iterations > 0 and iteration_count >= max_iterations:
-                logger.info(
-                    f"已达到 max_iterations={max_iterations}，退出迭代循环"
-                )
+                logger.info(f"已达到 max_iterations={max_iterations}，退出迭代循环")
                 break
             iteration_count += 1
             logger.info("=" * 60)

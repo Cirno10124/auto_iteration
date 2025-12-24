@@ -62,6 +62,7 @@ def test_cluster_speakers(monkeypatch):
     ]
     annotation = DummyAnnotation(turns)
     monkeypatch.setattr(separator, "diarize", lambda filename: annotation)
+
     # Stub embedding，根据 speaker 返回不同向量
     def fake_crop(file, turn, batch_size):
         if turn.speaker == "A":
@@ -81,18 +82,23 @@ def test_cluster_speakers_same_audio(monkeypatch):
     模拟同一音频两次聚类应合并到同一簇
     """
     from collections import namedtuple
+
     import torch  # noqa: F401, F403, E0401  # type: ignore
+
     # 初始化 separator
     separator = SpeakerSeparator(device="cpu")
     # 构造两个相同的分段
     Turn = namedtuple("Turn", ["start", "end", "speaker"])
     turns = [Turn(0.0, 1.0, "A"), Turn(0.0, 1.0, "A")]
+
     class DummyAnnotation:
         def __init__(self, turns):
             self._turns = turns
+
         def itertracks(self, yield_label=True):
             for t in self._turns:
                 yield t, None, t.speaker
+
     annotation = DummyAnnotation(turns)
     monkeypatch.setattr(separator, "diarize", lambda filename: annotation)
     # stub embedding 始终返回相同向量
@@ -113,6 +119,7 @@ def test_cluster_speakers_simple(monkeypatch):
     """
     import os
     from collections import namedtuple
+
     # 初始化 separator
     separator = SpeakerSeparator(device="cpu")
     # 测试音频路径
@@ -120,17 +127,21 @@ def test_cluster_speakers_simple(monkeypatch):
     # 构造两个相同的分段
     Turn = namedtuple("Turn", ["start", "end", "speaker"])
     turns = [Turn(0.0, 1.0, "A"), Turn(0.0, 1.0, "A")]
+
     class DummyAnnotation:
         def __init__(self, turns):
             self._turns = turns
+
         def itertracks(self, yield_label=True):
             for t in self._turns:
                 yield t, None, t.speaker
+
     annotation = DummyAnnotation(turns)
     # Monkeypatch diarize
     monkeypatch.setattr(separator, "diarize", lambda filename: annotation)
     # stub embedding：避免依赖 HF token / 网络
     import torch  # noqa: F401, F403, E0401  # type: ignore
+
     monkeypatch.setattr(
         separator.embedder,
         "crop",

@@ -128,7 +128,9 @@ class DummyEmbedder:
 
         # (1, 1, num_samples)
         waveforms = (
-            torch.from_numpy(segment.astype(_np.float32)).unsqueeze(0).unsqueeze(0)
+            torch.from_numpy(segment.astype(_np.float32))
+            .unsqueeze(0)
+            .unsqueeze(0)
         )
         embeddings = self._embedder(waveforms)
         # 返回 1D 向量，供上层 np.stack
@@ -162,9 +164,13 @@ class SpeakerSeparator:
             config_candidates.append(env_cfg)
 
         config_candidates.append(
-            os.path.join(os.path.dirname(__file__), "speaker_separator_config.json")
+            os.path.join(
+                os.path.dirname(__file__), "speaker_separator_config.json"
+            )
         )
-        config_candidates.append(os.path.abspath("speaker_separator_config.json"))
+        config_candidates.append(
+            os.path.abspath("speaker_separator_config.json")
+        )
 
         if hf_token is None:
             cfg = None
@@ -188,12 +194,16 @@ class SpeakerSeparator:
         self.device = device
         self.hf_token = hf_token
         # 延迟加载 embedding 推断器，cluster_speakers 时再初始化
-        self.embedder = DummyEmbedder(hf_token=self.hf_token, device=self.device)
+        self.embedder = DummyEmbedder(
+            hf_token=self.hf_token, device=self.device
+        )
 
         # 加载说话人分离模型
         print("正在加载 pyannote.audio 说话人分离模型...")
         try:
-            self.pipeline = Pipeline.from_pretrained(model_revision, token=hf_token)
+            self.pipeline = Pipeline.from_pretrained(
+                model_revision, token=hf_token
+            )
             self.pipeline.to(device)
             print("模型加载完成")
         except Exception as e:
@@ -279,10 +289,14 @@ class SpeakerSeparator:
         # 4. 构建结果
         clusters = {}
         for turn, label in zip(segments, labels):
-            clusters.setdefault(int(label), []).append((float(turn.start), float(turn.end)))
+            clusters.setdefault(int(label), []).append(
+                (float(turn.start), float(turn.end))
+            )
         return clusters
 
-    def save_speaker_segments(self, audio_file: str, out_dir: str | None = None):
+    def save_speaker_segments(
+        self, audio_file: str, out_dir: str | None = None
+    ):
         """
         将说话人分段保存到指定目录（默认: 相对于模块目录的 out/speakers）。
         """
@@ -310,5 +324,3 @@ class SpeakerSeparator:
             sf.write(path, segment, sr)
 
         return out_dir
-
-

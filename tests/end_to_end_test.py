@@ -101,7 +101,9 @@ class EndToEndTest(unittest.TestCase):
         calls_path = os.path.join(model_dir, "training_calls.txt")
         self.assertTrue(os.path.exists(calls_path), "未生成训练调用记录")
         with open(calls_path, "r", encoding="utf-8") as f:
-            calls = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
+            calls = [
+                ln.strip() for ln in f.read().splitlines() if ln.strip()
+            ]
         self.assertGreaterEqual(len(calls), 2, f"训练调用次数不足: {calls}")
         self.assertEqual(calls[0], base_model)
         self.assertEqual(calls[1], best_model_dir)
@@ -112,7 +114,9 @@ class EndToEndTest(unittest.TestCase):
         )
         self.assertTrue(os.path.exists(labeler_calls_path), "未生成标注调用记录")
         with open(labeler_calls_path, "r", encoding="utf-8") as f:
-            lcalls = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
+            lcalls = [
+                ln.strip() for ln in f.read().splitlines() if ln.strip()
+            ]
         self.assertGreaterEqual(len(lcalls), 2, f"标注调用次数不足: {lcalls}")
         self.assertEqual(lcalls[0], base_model)
         self.assertEqual(lcalls[1], best_model_dir)

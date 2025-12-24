@@ -28,7 +28,14 @@ def _find_manifest():
     candidates = [
         os.path.join(base, "out", "aishell1_4x10", "manifest.jsonl"),
         os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "out", "aishell1_4x10", "manifest.jsonl")
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "..",
+                "out",
+                "aishell1_4x10",
+                "manifest.jsonl",
+            )
         ),
     ]
     for p in candidates:
@@ -53,7 +60,9 @@ def test_ecapa_embedding_separates_speakers_on_small_zh_dataset():
     """
     manifest = _find_manifest()
     if not manifest:
-        pytest.skip("未找到小数据集 manifest.jsonl（可先运行 sample_commonvoice_zhcn.py 生成）")
+        pytest.skip(
+            "未找到小数据集 manifest.jsonl（可先运行 sample_commonvoice_zhcn.py 生成）"
+        )
 
     # 读取 manifest
     rows = []
@@ -157,6 +166,3 @@ def test_ecapa_embedding_separates_speakers_on_small_zh_dataset():
         f"[verification] nn_same_speaker_acc={acc:.3f} "
         f"(samples={len(embs)}, speakers={len(speaker_ids)})"
     )
-
-
-

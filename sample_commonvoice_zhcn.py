@@ -16,8 +16,8 @@
 import argparse
 import json
 import os
-from collections import defaultdict
 import re
+from collections import defaultdict
 
 import librosa  # noqa: E0401
 import numpy as np
@@ -95,37 +95,55 @@ def _get_audio(example):
                 # webdataset 也可能给 dict 里包含 bytes/path
                 if isinstance(audio, dict):
                     # 常见替代字段名
-                    if "data" in audio and isinstance(audio["data"], (bytes, bytearray, memoryview)):
+                    if "data" in audio and isinstance(
+                        audio["data"], (bytes, bytearray, memoryview)
+                    ):
                         import io
 
                         import soundfile as _sf  # noqa: E0401
 
-                        data, sr = _sf.read(io.BytesIO(bytes(audio["data"])))
+                        data, sr = _sf.read(
+                            io.BytesIO(bytes(audio["data"]))
+                        )
                         return data, int(sr)
                     if "sample_rate" in audio and "array" in audio:
                         return audio["array"], int(audio["sample_rate"])
                     if "sr" in audio and "array" in audio:
                         return audio["array"], int(audio["sr"])
-                    if "bytes" in audio and isinstance(audio["bytes"], (bytes, bytearray)):
+                    if "bytes" in audio and isinstance(
+                        audio["bytes"], (bytes, bytearray)
+                    ):
                         import io
 
                         import soundfile as _sf  # noqa: E0401
 
                         data, sr = _sf.read(io.BytesIO(audio["bytes"]))
                         return data, int(sr)
-                    if "bytes" in audio and isinstance(audio["bytes"], memoryview):
+                    if "bytes" in audio and isinstance(
+                        audio["bytes"], memoryview
+                    ):
                         import io
 
                         import soundfile as _sf  # noqa: E0401
 
-                        data, sr = _sf.read(io.BytesIO(bytes(audio["bytes"])))
+                        data, sr = _sf.read(
+                            io.BytesIO(bytes(audio["bytes"]))
+                        )
                         return data, int(sr)
-                    if "path" in audio and isinstance(audio["path"], str) and audio["path"]:
+                    if (
+                        "path" in audio
+                        and isinstance(audio["path"], str)
+                        and audio["path"]
+                    ):
                         import soundfile as _sf  # noqa: E0401
 
                         data, sr = _sf.read(audio["path"])
                         return data, int(sr)
-                    if "filename" in audio and isinstance(audio["filename"], str) and audio["filename"]:
+                    if (
+                        "filename" in audio
+                        and isinstance(audio["filename"], str)
+                        and audio["filename"]
+                    ):
                         import soundfile as _sf  # noqa: E0401
 
                         data, sr = _sf.read(audio["filename"])
@@ -143,9 +161,20 @@ def _get_audio(example):
                         return arr, int(sr)
                 # datasets + torchcodec: AudioDecoder
                 # 兼容 datasets.features._torchcodec.AudioDecoder（不同版本方法名可能不同）
-                if type(audio).__name__ == "AudioDecoder" and "datasets.features._torchcodec" in type(audio).__module__:
+                if (
+                    type(audio).__name__ == "AudioDecoder"
+                    and "datasets.features._torchcodec"
+                    in type(audio).__module__
+                ):
                     # 优先尝试从其暴露的 path/bytes 读取
-                    for attr in ["path", "_path", "uri", "_uri", "filename", "_filename"]:
+                    for attr in [
+                        "path",
+                        "_path",
+                        "uri",
+                        "_uri",
+                        "filename",
+                        "_filename",
+                    ]:
                         if hasattr(audio, attr):
                             p = getattr(audio, attr)
                             if isinstance(p, str) and p:
@@ -153,10 +182,19 @@ def _get_audio(example):
 
                                 data, sr = _sf.read(p)
                                 return data, int(sr)
-                    for attr in ["bytes", "_bytes", "data", "_data", "buffer", "_buffer"]:
+                    for attr in [
+                        "bytes",
+                        "_bytes",
+                        "data",
+                        "_data",
+                        "buffer",
+                        "_buffer",
+                    ]:
                         if hasattr(audio, attr):
                             b = getattr(audio, attr)
-                            if isinstance(b, (bytes, bytearray, memoryview)):
+                            if isinstance(
+                                b, (bytes, bytearray, memoryview)
+                            ):
                                 import io
 
                                 import soundfile as _sf  # noqa: E0401
@@ -164,29 +202,52 @@ def _get_audio(example):
                                 data, sr = _sf.read(io.BytesIO(bytes(b)))
                                 return data, int(sr)
                     # 再尝试可能的方法名
-                    for m in ["decode", "get_all_samples", "get_samples", "to_numpy", "to_array"]:
+                    for m in [
+                        "decode",
+                        "get_all_samples",
+                        "get_samples",
+                        "to_numpy",
+                        "to_array",
+                    ]:
                         if hasattr(audio, m):
                             fn = getattr(audio, m)
                             if callable(fn):
                                 decoded = fn()
                                 # 兼容：可能返回 (arr, sr)
-                                if isinstance(decoded, (tuple, list)) and len(decoded) == 2:
+                                if (
+                                    isinstance(decoded, (tuple, list))
+                                    and len(decoded) == 2
+                                ):
                                     arr, sr = decoded
                                     return arr, int(sr)
                                 if isinstance(decoded, dict):
-                                    if "array" in decoded and ("sampling_rate" in decoded or "sample_rate" in decoded):
-                                        sr = decoded.get("sampling_rate", decoded.get("sample_rate"))
-                                        arr = _unwrap_audio_array(decoded["array"])
+                                    if "array" in decoded and (
+                                        "sampling_rate" in decoded
+                                        or "sample_rate" in decoded
+                                    ):
+                                        sr = decoded.get(
+                                            "sampling_rate",
+                                            decoded.get("sample_rate"),
+                                        )
+                                        arr = _unwrap_audio_array(
+                                            decoded["array"]
+                                        )
                                         return arr, int(sr)
                                 # 兼容：可能只返回 samples（torch.Tensor / np.ndarray / list）
-                                sr = getattr(audio, "_desired_sample_rate", None)
+                                sr = getattr(
+                                    audio, "_desired_sample_rate", None
+                                )
                                 if sr is None:
                                     md = getattr(audio, "metadata", None)
                                     # metadata 可能是 dict 或对象
                                     if isinstance(md, dict):
-                                        sr = md.get("sample_rate") or md.get("sampling_rate")
+                                        sr = md.get(
+                                            "sample_rate"
+                                        ) or md.get("sampling_rate")
                                     else:
-                                        sr = getattr(md, "sample_rate", None) or getattr(
+                                        sr = getattr(
+                                            md, "sample_rate", None
+                                        ) or getattr(
                                             md, "sampling_rate", None
                                         )
                                 if sr is None:
@@ -195,7 +256,9 @@ def _get_audio(example):
                                 arr = _unwrap_audio_array(decoded)
                                 return arr, int(sr)
                     # 最后给出可诊断信息
-                    attrs = [a for a in dir(audio) if not a.startswith("__")]
+                    attrs = [
+                        a for a in dir(audio) if not a.startswith("__")
+                    ]
                     raise TypeError(
                         "检测到 datasets.features._torchcodec.AudioDecoder，但无法解码出音频。"
                         f"可用属性/方法示例(前50): {attrs[:50]}"
@@ -204,32 +267,59 @@ def _get_audio(example):
                 if hasattr(audio, "decode"):
                     decoded = audio.decode()
                     # 可能返回 (waveform, sr) 或 dict
-                    if isinstance(decoded, (tuple, list)) and len(decoded) == 2:
+                    if (
+                        isinstance(decoded, (tuple, list))
+                        and len(decoded) == 2
+                    ):
                         arr, sr = decoded
                         return arr, int(sr)
                     if isinstance(decoded, dict):
-                        if "array" in decoded and ("sampling_rate" in decoded or "sample_rate" in decoded):
-                            sr = decoded.get("sampling_rate", decoded.get("sample_rate"))
+                        if "array" in decoded and (
+                            "sampling_rate" in decoded
+                            or "sample_rate" in decoded
+                        ):
+                            sr = decoded.get(
+                                "sampling_rate", decoded.get("sample_rate")
+                            )
                             return decoded["array"], int(sr)
                 if hasattr(audio, "get_all_samples"):
                     decoded = audio.get_all_samples()
-                    if isinstance(decoded, (tuple, list)) and len(decoded) == 2:
+                    if (
+                        isinstance(decoded, (tuple, list))
+                        and len(decoded) == 2
+                    ):
                         arr, sr = decoded
                         return arr, int(sr)
                 # 有些实现把采样率暴露为属性
-                if hasattr(audio, "sampling_rate") and hasattr(audio, "__array__"):
-                    return np.asarray(audio), int(getattr(audio, "sampling_rate"))
+                if hasattr(audio, "sampling_rate") and hasattr(
+                    audio, "__array__"
+                ):
+                    return np.asarray(audio), int(
+                        getattr(audio, "sampling_rate")
+                    )
 
                 # 落到这里说明我们识别不了该 wav 的形态
                 raise TypeError(
                     f"不支持的 {k} 字段格式: type={type(audio)}"
-                    + (f", keys={list(audio.keys())}" if isinstance(audio, dict) else "")
+                    + (
+                        f", keys={list(audio.keys())}"
+                        if isinstance(audio, dict)
+                        else ""
+                    )
                 )
-        raise KeyError(f"样本中缺少 audio 字段（可用 keys: {list(example.keys())[:50]}）")
+        raise KeyError(
+            f"样本中缺少 audio 字段（可用 keys: {list(example.keys())[:50]}）"
+        )
     audio = example["audio"]
-    if isinstance(audio, dict) and "array" in audio and "sampling_rate" in audio:
+    if (
+        isinstance(audio, dict)
+        and "array" in audio
+        and "sampling_rate" in audio
+    ):
         return audio["array"], int(audio["sampling_rate"])
-    raise TypeError(f"不支持的 audio 格式: {type(audio)} {list(audio.keys()) if isinstance(audio, dict) else ''}")
+    raise TypeError(
+        f"不支持的 audio 格式: {type(audio)} {list(audio.keys()) if isinstance(audio, dict) else ''}"
+    )
 
 
 def _to_wav_16k_mono(x: np.ndarray, sr: int) -> tuple[np.ndarray, int]:
@@ -249,11 +339,15 @@ def _to_wav_16k_mono(x: np.ndarray, sr: int) -> tuple[np.ndarray, int]:
             x = np.mean(x, axis=1)
     x = x.astype(np.float32, copy=False)
     if sr != 16000:
-        x = librosa.resample(x, orig_sr=sr, target_sr=16000).astype(np.float32, copy=False)
+        x = librosa.resample(x, orig_sr=sr, target_sr=16000).astype(
+            np.float32, copy=False
+        )
         sr = 16000
     # 极短音频保护：若出现长度异常（例如只有 1 个采样点），大概率是上游字段解析/维度判断出了问题
     if x.ndim != 1 or x.shape[0] < 160:  # 10ms @ 16kHz
-        raise ValueError(f"decoded audio too short or wrong shape: shape={x.shape}, sr={sr}")
+        raise ValueError(
+            f"decoded audio too short or wrong shape: shape={x.shape}, sr={sr}"
+        )
     return x, sr
 
 
@@ -265,17 +359,33 @@ def main():
         default="mozilla-foundation/common_voice_17_0",
         help="HF dataset name，例如 mozilla-foundation/common_voice_17_0",
     )
-    parser.add_argument("--lang", type=str, default="zh-CN", help="语言配置，例如 zh-CN")
+    parser.add_argument(
+        "--lang", type=str, default="zh-CN", help="语言配置，例如 zh-CN"
+    )
     parser.add_argument(
         "--config",
         type=str,
         default=None,
         help="datasets 的 config 名称（可选）。Common Voice 用 zh-CN；其他数据集可能不需要。",
     )
-    parser.add_argument("--split", type=str, default="train", help="split，例如 train/validation/test")
-    parser.add_argument("--out_dir", type=str, required=True, help="输出目录，例如 out/cv_zhcn_4x10")
-    parser.add_argument("--num_speakers", type=int, default=4, help="说话人数量")
-    parser.add_argument("--per_speaker", type=int, default=10, help="每个说话人采样条数")
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="train",
+        help="split，例如 train/validation/test",
+    )
+    parser.add_argument(
+        "--out_dir",
+        type=str,
+        required=True,
+        help="输出目录，例如 out/cv_zhcn_4x10",
+    )
+    parser.add_argument(
+        "--num_speakers", type=int, default=4, help="说话人数量"
+    )
+    parser.add_argument(
+        "--per_speaker", type=int, default=10, help="每个说话人采样条数"
+    )
     parser.add_argument(
         "--max_scan",
         type=int,
@@ -317,7 +427,9 @@ def main():
                 # ds.id 是 dataset repo id
                 print(ds.id)
         except Exception as e:
-            raise RuntimeError(f"搜索失败（可能无法访问 Hub/镜像的 datasets 列表 API）: {e}")
+            raise RuntimeError(
+                f"搜索失败（可能无法访问 Hub/镜像的 datasets 列表 API）: {e}"
+            )
         return
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -330,7 +442,11 @@ def main():
         config = args.config
         if config is None:
             # 允许用户用 --lang default/none 来显式表示“不要 config”
-            if args.lang and args.lang.lower() not in ("default", "none", ""):
+            if args.lang and args.lang.lower() not in (
+                "default",
+                "none",
+                "",
+            ):
                 config = args.lang
 
         if config:
@@ -361,8 +477,18 @@ def main():
         tried.append((args.dataset, str(e)))
 
     # 2) 常见 Common Voice 版本回退（有些环境的镜像/索引可能缺某些版本的数据文件）
-    if ds is None and args.dataset.startswith("mozilla-foundation/common_voice_"):
-        for ver in ["17_0", "16_1", "15_0", "14_0", "13_0", "12_0", "11_0"]:
+    if ds is None and args.dataset.startswith(
+        "mozilla-foundation/common_voice_"
+    ):
+        for ver in [
+            "17_0",
+            "16_1",
+            "15_0",
+            "14_0",
+            "13_0",
+            "12_0",
+            "11_0",
+        ]:
             candidate = f"mozilla-foundation/common_voice_{ver}"
             if candidate == args.dataset:
                 continue
@@ -381,7 +507,12 @@ def main():
         def _pick_files(ext: str):
             files = fs.glob(f"{base}/**/*.{ext}")
             # 尽量过滤出包含语言与 split 的分片（Common Voice 常见命名/目录结构）
-            lang = args.lang.lower() if args.lang and args.lang.lower() not in ("default", "none", "") else ""
+            lang = (
+                args.lang.lower()
+                if args.lang
+                and args.lang.lower() not in ("default", "none", "")
+                else ""
+            )
             split = args.split.lower()
             filtered = []
             for p in files:
@@ -422,7 +553,9 @@ def main():
                 streaming=True,
             )
         else:
-            msg = "\n".join([f"- {name}: {err}" for name, err in tried[-5:]])
+            msg = "\n".join(
+                [f"- {name}: {err}" for name, err in tried[-5:]]
+            )
             raise RuntimeError(
                 f"无法以 streaming 方式加载数据集：{args.dataset}（lang={args.lang}, split={args.split}）。\n"
                 f"已尝试的版本/错误（最后 5 条）：\n{msg}\n"
@@ -516,14 +649,19 @@ def main():
             if "wav" in ex:
                 w = ex["wav"]
                 if isinstance(w, dict):
-                    print(f"[debug] sample#{scanned} wav=dict keys={list(w.keys())}")
+                    print(
+                        f"[debug] sample#{scanned} wav=dict keys={list(w.keys())}"
+                    )
                 else:
                     print(f"[debug] sample#{scanned} wav=type={type(w)}")
 
         speaker_id = _extract_speaker_id(ex)
         if not speaker_id:
             continue
-        if speaker_id in picked and len(picked[speaker_id]) >= args.per_speaker:
+        if (
+            speaker_id in picked
+            and len(picked[speaker_id]) >= args.per_speaker
+        ):
             continue
 
         # 如果还没凑够 speakers，就允许加入新 speaker；否则只补齐已选 speaker
@@ -539,7 +677,9 @@ def main():
             break
 
     # 过滤掉不足 per_speaker 的 speaker（极端情况下会发生）
-    picked = {k: v for k, v in picked.items() if len(v) >= args.per_speaker}
+    picked = {
+        k: v for k, v in picked.items() if len(v) >= args.per_speaker
+    }
     # 若超过 num_speakers，则截断
     speaker_ids = list(picked.keys())[: args.num_speakers]
 
@@ -572,7 +712,9 @@ def main():
                 }
                 mf.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    print(f"完成：{args.num_speakers} speakers * {args.per_speaker} 条，共 {args.num_speakers * args.per_speaker} 条")
+    print(
+        f"完成：{args.num_speakers} speakers * {args.per_speaker} 条，共 {args.num_speakers * args.per_speaker} 条"
+    )
     print(f"输出目录: {args.out_dir}")
     print(f"manifest: {manifest_path}")
     print(f"扫描样本数: {scanned}")
@@ -580,5 +722,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

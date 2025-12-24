@@ -198,9 +198,7 @@ def main():
 
         _ = torch.load(model_bin, map_location="cpu")
     except Exception as e:
-        logger.warning(
-            f"合并后的权重文件无法加载（{model_bin}），后续转换很可能失败。错误: {e}"
-        )
+        logger.warning(f"合并后的权重文件无法加载（{model_bin}），后续转换很可能失败。错误: {e}")
 
     # 选择转换脚本路径
     if args.use_h5_to_ggml:
@@ -250,9 +248,7 @@ def main():
             logger.error(f"缺少回退脚本: {fallback_script}")
             sys.exit(1)
         if not os.path.exists(model_bin):
-            logger.error(
-                f"回退转换需要权重文件，但未找到 {model_bin}（请检查合并/保存步骤是否成功）"
-            )
+            logger.error(f"回退转换需要权重文件，但未找到 {model_bin}（请检查合并/保存步骤是否成功）")
             sys.exit(1)
         fallback_cmd = [
             sys.executable,
