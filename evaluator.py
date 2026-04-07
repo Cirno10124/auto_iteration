@@ -13,6 +13,13 @@ from datasets import load_dataset
 from peft import PeftModel
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
+try:
+    import opencc
+
+    _opencc_converter = opencc.OpenCC("t2s")
+except Exception:
+    _opencc_converter = None
+
 
 def setup_logging():
     """设置日志系统"""
@@ -192,10 +199,38 @@ def prepare_audio(
         return None, None
 
 
+def normalize_zh_text(text: str) -> str:
+    """将文本统一为简体中文，并去除标点和空白，仅保留中英文和数字。"""
+    if not isinstance(text, str):
+        return ""
+    text = text.strip()
+    if not text:
+        return ""
+
+    # 统一为简体中文（若 OpenCC 可用）
+    if _opencc_converter is not None:
+        try:
+            text = _opencc_converter.convert(text)
+        except Exception:
+            # 转换失败则继续使用原文
+            pass
+
+    # 统一大小写以消除英文字母差异
+    text = text.lower()
+
+    # 去除标点符号、空白等，仅保留中英文和数字
+    # \u4e00-\u9fff 为常用汉字区
+    text = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]", "", text)
+    return text
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="评估 Whisper 微调模型")
     parser.add_argument(
-        "--model_dir", type=str, required=True, help="微调后模型目录"
+        "--model_dir",
+        type=str,
+        required=True,
+        help="微调后模型目录，或 Hugging Face 模型 ID（如 openai/whisper-large-v3-turbo），非本地路径时从 hub 加载",
     )
     parser.add_argument(
         "--base_model_path",
@@ -259,61 +294,74 @@ if __name__ == "__main__":
     logger.info(f"评估指标: {args.metric.upper()}")
     logger.info("=" * 60)
 
-    # 检查文件是否存在
+    # 检查测试清单是否存在
     if not os.path.exists(args.test_manifest):
         logger.error(f"测试清单文件不存在: {args.test_manifest}")
         exit(1)
 
-    if not os.path.exists(args.model_dir):
-        logger.error(f"模型目录不存在: {args.model_dir}")
-        exit(1)
-
-    # 优先使用上一轮最佳 LoRA 模型（best_model），如果不存在再依次查找
-    best_model_dir = os.path.join(args.model_dir, "best_model")
-    if os.path.isdir(best_model_dir):
-        logger.info(f"检测到上一轮最佳模型: {best_model_dir}，将用于评估")
-        # 保存原始 model_dir 作为 base_model_path
-        args.base_model_path = args.model_dir
-        args.model_dir = best_model_dir
-
-    # 查找模型路径
-    model_path, base_model_path, is_merged = find_model_path(
-        args.model_dir, logger
-    )
-    if model_path is None:
-        logger.error("未找到可用的模型")
-        exit(1)
-
-    # 如果未指定基础模型路径，尝试从配置推断
-    if base_model_path is None and not is_merged:
-        # 尝试从训练配置读取
-        config_path = os.path.join(args.model_dir, "training_config.json")
-        if os.path.exists(config_path):
-            try:
-                import json
-
-                with open(config_path, "r") as f:
-                    config = json.load(f)
-                    if "model_name_or_path" in config:
-                        base_model_path = config["model_name_or_path"]
-                        logger.info(f"从配置文件读取基础模型路径: {base_model_path}")
-            except Exception as e:
-                logger.warning(f"读取配置文件失败: {e}")
-
-    # 如果仍然没有基础模型路径，使用命令行参数
-    if base_model_path is None:
-        base_model_path = args.base_model_path
-
-    # 加载模型和处理器
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"使用设备: {device}")
 
-    model, processor = load_model_with_peft(
-        model_path, base_model_path, device, logger
-    )
-    if model is None or processor is None:
-        logger.error("模型或处理器加载失败，退出")
-        exit(1)
+    # 若 model_dir 非本地路径，视为 Hugging Face 模型 ID，从 hub 加载
+    if not os.path.exists(args.model_dir):
+        logger.info(
+            f"模型路径非本地目录，按在线模型加载: {args.model_dir}"
+        )
+        try:
+            model = WhisperForConditionalGeneration.from_pretrained(
+                args.model_dir
+            )
+            processor = WhisperProcessor.from_pretrained(args.model_dir)
+            model = model.to(device)
+            model.eval()
+        except Exception as e:
+            logger.error(f"加载在线模型失败: {e}")
+            logger.error(traceback.format_exc())
+            exit(1)
+    else:
+        # 本地目录：优先使用上一轮最佳 LoRA 模型（best_model）
+        best_model_dir = os.path.join(args.model_dir, "best_model")
+        if os.path.isdir(best_model_dir):
+            logger.info(f"检测到上一轮最佳模型: {best_model_dir}，将用于评估")
+            args.base_model_path = args.model_dir
+            args.model_dir = best_model_dir
+
+        # 查找模型路径
+        model_path, base_model_path, is_merged = find_model_path(
+            args.model_dir, logger
+        )
+        if model_path is None:
+            logger.error("未找到可用的模型")
+            exit(1)
+
+        # 如果未指定基础模型路径，尝试从配置推断
+        if base_model_path is None and not is_merged:
+            config_path = os.path.join(
+                args.model_dir, "training_config.json"
+            )
+            if os.path.exists(config_path):
+                try:
+                    import json
+
+                    with open(config_path, "r") as f:
+                        config = json.load(f)
+                        if "model_name_or_path" in config:
+                            base_model_path = config["model_name_or_path"]
+                            logger.info(
+                                f"从配置文件读取基础模型路径: {base_model_path}"
+                            )
+                except Exception as e:
+                    logger.warning(f"读取配置文件失败: {e}")
+
+        if base_model_path is None:
+            base_model_path = args.base_model_path
+
+        model, processor = load_model_with_peft(
+            model_path, base_model_path, device, logger
+        )
+        if model is None or processor is None:
+            logger.error("模型或处理器加载失败，退出")
+            exit(1)
 
     # 加载测试集
     try:
@@ -386,8 +434,11 @@ if __name__ == "__main__":
                 failed_count += 1
                 continue
 
-            predictions.append(pred)
-            references.append(ref)
+            # 验证口径统一：简体化 + 去标点空白（仅内存中处理）
+            ref_norm = normalize_zh_text(ref)
+            pred_norm = normalize_zh_text(pred)
+            references.append(ref_norm)
+            predictions.append(pred_norm)
 
             if (idx + 1) % 10 == 0:
                 logger.info(f"已处理 {idx+1}/{len(ds)} 个样本")
@@ -395,8 +446,8 @@ if __name__ == "__main__":
             # 打印样本（前5个）
             if len(predictions) <= 5:
                 logger.info(f"样本 {len(predictions)}:")
-                logger.info(f"  参考: {ref}")
-                logger.info(f"  预测: {pred}")
+                logger.info(f"  参考: {ref_norm}")
+                logger.info(f"  预测: {pred_norm}")
 
         except Exception as e:
             logger.error(f"样本 {idx+1}: 处理时出现未预期错误: {e}")
@@ -412,10 +463,13 @@ if __name__ == "__main__":
 
     # 计算指标
     try:
+        refs_for_metric = references
+        preds_for_metric = predictions
+
         if args.metric.lower() == "wer":
-            score = jiwer.wer(references, predictions)
+            score = jiwer.wer(refs_for_metric, preds_for_metric)
         else:
-            score = jiwer.cer(references, predictions)
+            score = jiwer.cer(refs_for_metric, preds_for_metric)
 
         logger.info("=" * 60)
         logger.info(f"评估结果: {args.metric.upper()} = {score:.4f}")

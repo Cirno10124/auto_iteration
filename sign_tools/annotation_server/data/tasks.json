@@ -1,0 +1,14 @@
+[
+  {
+    "id": "sample-001",
+    "audioPath": "sample-001.wav",
+    "pseudoLabel": "这是一个示例伪标签，用来测试标注工具的整体流程。",
+    "confidence": 0.82,
+    "batchId": "demo-batch-1",
+    "priority": 1,
+    "meta": {
+      "source": "demo",
+      "durationSec": 5.2
+    }
+  }
+]

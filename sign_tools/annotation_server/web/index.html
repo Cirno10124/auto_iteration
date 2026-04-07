@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>音频标注工具</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="app-header">
+        <div class="header-left">
+          <h1 class="app-title">音频标注工具</h1>
+          <div class="filters">
+            <label>
+              状态：
+              <select id="statusFilter">
+                <option value="">全部</option>
+                <option value="pending">待标注</option>
+                <option value="labeled">已标注</option>
+                <option value="skipped">已跳过</option>
+                <option value="removed">已剔除</option>
+              </select>
+            </label>
+            <label>
+              排序：
+              <select id="sortMode">
+                <option value="index">默认顺序</option>
+                <option value="priority">优先级（从高到低）</option>
+                <option value="confidenceLow">置信度从低到高</option>
+                <option value="confidenceHigh">置信度从高到低</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="header-right">
+          <div id="progressText" class="progress-text">加载中…</div>
+          <div class="progress-bar">
+            <div id="progressBarInner" class="progress-bar-inner"></div>
+          </div>
+          <button id="exportBackfillBtn" class="ghost-btn">导出回填 CSV</button>
+          <button id="shortcutHelpBtn" class="ghost-btn">快捷键说明</button>
+        </div>
+      </header>
+
+      <div class="app-body">
+        <aside class="sidebar">
+          <div class="sidebar-header">任务列表</div>
+          <ul id="taskList" class="task-list"></ul>
+        </aside>
+
+        <main class="main">
+          <section class="player-section">
+            <div class="player-top">
+              <div class="current-id" id="currentTaskInfo">未选择任务</div>
+              <div class="player-meta" id="currentMetaInfo"></div>
+            </div>
+            <div class="player-controls">
+              <audio id="audioPlayer" preload="metadata" controls></audio>
+              <div class="player-extra">
+                <button id="backwardBtn" class="icon-btn">-3s</button>
+                <button id="playPauseBtn" class="primary-btn">播放 / 暂停</button>
+                <button id="forwardBtn" class="icon-btn">+3s</button>
+                <label>
+                  倍速：
+                  <select id="playbackRateSelect">
+                    <option value="0.5">0.5x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="1.5">1.5x</option>
+                    <option value="2">2x</option>
+                  </select>
+                </label>
+                <label class="volume-control">
+                  音量：<input type="range" id="volumeSlider" min="50" max="500" value="100" step="10" />
+                  <span id="volumeValue">100%</span>
+                </label>
+                <span id="timeInfo" class="time-info">00:00 / 00:00</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="editor-section">
+            <div class="editor-header">
+              <span>伪标签文本</span>
+              <div class="editor-actions">
+                <button id="resetTextBtn" class="ghost-btn">恢复原始伪标签</button>
+              </div>
+            </div>
+            <textarea
+              id="labelEditor"
+              class="label-editor"
+              placeholder="选择左侧任务后开始编辑伪标签文本…"
+            ></textarea>
+          </section>
+        </main>
+
+        <aside class="meta-panel">
+          <div class="panel-block">
+            <div class="panel-title">当前样本信息</div>
+            <div id="metaDetails" class="meta-details"></div>
+          </div>
+          <div class="panel-block">
+            <div class="panel-title">标签等级</div>
+            <div class="level-group">
+              <label><input type="radio" name="labelLevel" value="A" /> A（严格人工审核）</label>
+              <label><input type="radio" name="labelLevel" value="B" checked /> B（快速过目）</label>
+              <label><input type="radio" name="labelLevel" value="C" /> C（仅伪标签）</label>
+            </div>
+          </div>
+          <div class="panel-block">
+            <div class="panel-title">问题 / 拒标标记</div>
+            <select id="issueTagSelect">
+              <option value="">无</option>
+              <option value="unclear">无法听清</option>
+              <option value="noise">噪音过大</option>
+              <option value="language">非目标语言</option>
+              <option value="review">需复核</option>
+            </select>
+          </div>
+          <div class="panel-block">
+            <div class="panel-title">统计</div>
+            <ul id="statsList" class="stats-list"></ul>
+          </div>
+        </aside>
+      </div>
+
+      <footer class="action-bar">
+        <div class="action-group">
+          <button id="acceptBtn" class="secondary-btn">接受当前标签</button>
+          <button id="submitNextBtn" class="primary-btn">提交并下一条（Enter）</button>
+          <button id="skipBtn" class="ghost-btn">跳过（S）</button>
+          <button id="discardBtn" class="ghost-btn">剔除当前（置空text）</button>
+        </div>
+        <div class="shortcut-hint">
+          空格：播放/暂停 · Enter：提交并下一条 · S：跳过 · J/←：后退3s · L/→：前进3s · Esc：取消编辑
+        </div>
+      </footer>
+    </div>
+
+    <div id="shortcutDialog" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>快捷键说明</h2>
+          <button id="closeShortcutDialog" class="icon-btn">×</button>
+        </div>
+        <table class="shortcut-table">
+          <thead>
+            <tr>
+              <th>按键</th>
+              <th>动作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>空格</td><td>播放 / 暂停</td></tr>
+            <tr><td>Enter</td><td>保存当前并进入下一条</td></tr>
+            <tr><td>S</td><td>跳过当前</td></tr>
+            <tr><td>Ctrl+Z</td><td>文本撤销（浏览器默认行为）</td></tr>
+            <tr><td>← / J</td><td>后退 3 秒</td></tr>
+            <tr><td>→ / L</td><td>前进 3 秒</td></tr>
+            <tr><td>Esc</td><td>取消当前编辑 / 关闭弹窗</td></tr>
+            <tr><td>1 / 2 / 3</td><td>快速选等级 A / B / C</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

@@ -15,8 +15,9 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 
-def read_existing_csv(csv_path):
-    """读取现有的CSV文件，返回音频路径集合和完整数据列表"""
+def read_existing_csv(csv_path, skip_empty_transcript=True):
+    """读取现有的CSV文件，返回音频路径集合和完整数据列表。
+    若 skip_empty_transcript 为 True，则跳过 transcript 为空的条目。"""
     if not os.path.exists(csv_path):
         return set(), []
 
@@ -28,6 +29,8 @@ def read_existing_csv(csv_path):
             for row in reader:
                 audio_path = row["audio_filepath"]
                 text = row.get("text", "").strip()
+                if skip_empty_transcript and not text:
+                    continue
                 audio_paths.add(audio_path)
                 data.append((audio_path, text))
     except Exception as e:
@@ -105,8 +108,8 @@ def main():
 
     if is_first_iteration:
         logger.info("首次迭代：进行初始数据集分割")
-        # 首次迭代：扫描所有数据并分割
-        pairs = []
+        # 首次迭代：扫描所有数据，只读一次标签并过滤空 transcript，再分割
+        all_data = []
         for root, _, files in os.walk(args.audio_dir):
             for fname in files:
                 if not fname.lower().endswith((".wav", ".flac", ".mp3")):
@@ -122,15 +125,23 @@ def main():
                 if os.path.getsize(label_path) == 0:
                     logger.warning(f"空标注文件 {label_path}, 跳过")
                     continue
-                pairs.append((audio_path, label_path))
+                try:
+                    with open(label_path, "r", encoding="utf-8") as lf:
+                        text = lf.read().strip()
+                    if not text:
+                        logger.warning(f"空 transcript，跳过: {label_path}")
+                        continue
+                    all_data.append((audio_path, text))
+                except Exception as e:
+                    logger.warning(f"读取标签文件失败 {label_path}: {e}")
 
-        if len(pairs) == 0:
-            logger.error("未找到任何有效的音频-标签对，无法构建清单")
+        if len(all_data) == 0:
+            logger.error("未找到任何有效的音频-标签对（且 transcript 非空），无法构建清单")
             return
 
         random.seed(args.seed)
-        random.shuffle(pairs)
-        total = len(pairs)
+        random.shuffle(all_data)
+        total = len(all_data)
         # 计算各数据集大小，确保验证集和测试集至少包含1条
         train_size = int(total * args.train_ratio)
         test_size = int(total * args.test_ratio)
@@ -144,26 +155,10 @@ def main():
         train_size = total - val_size - test_size
         if train_size < 0:
             train_size = 0
-        # 划分数据
-        train_pairs = pairs[:train_size]
-        val_pairs = pairs[train_size : train_size + val_size]
-        test_pairs = pairs[train_size + val_size :]
-
-        # 将 (audio_path, label_path) 转换为 (audio_path, text)
-        def load_text_from_pairs(pair_list):
-            result = []
-            for audio_path, label_path in pair_list:
-                try:
-                    with open(label_path, "r", encoding="utf-8") as lf:
-                        text = lf.read().strip()
-                    result.append((audio_path, text))
-                except Exception as e:
-                    logger.warning(f"读取标签文件失败 {label_path}: {e}")
-            return result
-
-        train_data = load_text_from_pairs(train_pairs)
-        val_data = load_text_from_pairs(val_pairs)
-        test_data = load_text_from_pairs(test_pairs)
+        # 划分数据（已是 (audio_path, text)）
+        train_data = all_data[:train_size]
+        val_data = all_data[train_size : train_size + val_size]
+        test_data = all_data[train_size + val_size :]
 
         # 检查数据量
         check_data_size(len(train_data), "训练集", logger)
@@ -228,16 +223,23 @@ def main():
 
         logger.info(f"发现 {len(new_pairs)} 条新数据，将添加到训练集")
 
-        # 将新数据添加到训练集
+        # 将新数据添加到训练集，过滤空 transcript
         updated_train_data = existing_train_data.copy()
+        skipped_empty = 0
         for audio_path, label_path in new_pairs:
             try:
                 with open(label_path, "r", encoding="utf-8") as lf:
                     text = lf.read().strip()
+                if not text:
+                    logger.warning(f"空 transcript，跳过: {label_path}")
+                    skipped_empty += 1
+                    continue
                 updated_train_data.append((audio_path, text))
             except Exception as e:
                 logger.warning(f"读取新标签文件失败 {label_path}: {e}")
                 continue
+        if skipped_empty:
+            logger.info(f"新增数据中因空 transcript 跳过 {skipped_empty} 条")
 
         # 检查更新后的数据量
         check_data_size(len(updated_train_data), "训练集", logger)

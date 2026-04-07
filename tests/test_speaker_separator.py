@@ -1,5 +1,8 @@
 import os
-import sys
+import sys # noqa: E401, F401, F403, E0401  # type: ignores
+from collections import namedtuple
+
+import torch  
 
 sys.path.insert(0, os.getcwd())
 from speaker_separator import SpeakerSeparator
@@ -36,10 +39,6 @@ def test_save_speaker_segments(tmp_path):
 
 
 def test_cluster_speakers(monkeypatch):
-    from collections import namedtuple
-
-    import torch  # noqa: F401, F403, E0401  # type: ignore
-
     # 创建 separator，使用 CPU
     separator = SpeakerSeparator(device="cpu")
     # 构造 DummyTurn
@@ -81,9 +80,6 @@ def test_cluster_speakers_same_audio(monkeypatch):
     """
     模拟同一音频两次聚类应合并到同一簇
     """
-    from collections import namedtuple
-
-    import torch  # noqa: F401, F403, E0401  # type: ignore
 
     # 初始化 separator
     separator = SpeakerSeparator(device="cpu")
@@ -117,8 +113,6 @@ def test_cluster_speakers_simple(monkeypatch):
     """
     使用真实 embedder，模拟同一音频的两个相同分段，测试聚类合并功能
     """
-    import os
-    from collections import namedtuple
 
     # 初始化 separator
     separator = SpeakerSeparator(device="cpu")
@@ -140,7 +134,6 @@ def test_cluster_speakers_simple(monkeypatch):
     # Monkeypatch diarize
     monkeypatch.setattr(separator, "diarize", lambda filename: annotation)
     # stub embedding：避免依赖 HF token / 网络
-    import torch  # noqa: F401, F403, E0401  # type: ignore
 
     monkeypatch.setattr(
         separator.embedder,

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import os
 
@@ -40,6 +41,11 @@ import numpy as np
 import torch  # noqa: E0401
 from pyannote.audio import Pipeline  # noqa: E0401
 from sklearn.cluster import AgglomerativeClustering
+
+try:
+    from mysql_embedding_store import MySQLEmbeddingStore
+except Exception:  # pragma: no cover - optional dependency
+    MySQLEmbeddingStore = None
 
 
 # 占位 embedding 推断器，当初始化失败时使用
@@ -158,6 +164,9 @@ class SpeakerSeparator:
         config_path = os.path.join(
             os.path.dirname(__file__), "speaker_separator_config.json"
         )
+        cross_run_threshold = 0.85
+        mysql_config = {}
+        mysql_namespace = "default"
         if hf_token is None:
             try:
                 with open(config_path, "r") as cf:
@@ -166,6 +175,11 @@ class SpeakerSeparator:
                 hf_token = cfg.get("hf_token", hf_token)
                 device = cfg.get("device", device)
                 snr_threshold = cfg.get("snr_threshold", snr_threshold)
+                cross_run_threshold = cfg.get(
+                    "cross_run_threshold", cross_run_threshold
+                )
+                mysql_config = cfg.get("mysql", mysql_config)
+                mysql_namespace = mysql_config.get("namespace", mysql_namespace)
             except Exception as e:
                 print(f"警告：加载配置文件失败，将使用默认参数: {e}")
 
@@ -177,6 +191,17 @@ class SpeakerSeparator:
         self.embedder = DummyEmbedder(
             hf_token=self.hf_token, device=self.device
         )
+        self.cross_run_threshold = cross_run_threshold
+        self.mysql_store = None
+        self.mysql_namespace = mysql_namespace
+        if (
+            mysql_config
+            and mysql_config.get("enabled")
+            and MySQLEmbeddingStore is not None
+        ):
+            self.mysql_store = MySQLEmbeddingStore(
+                mysql_config, similarity_threshold=self.cross_run_threshold
+            )
 
         # 加载说话人分离模型
         print("正在加载 pyannote.audio 说话人分离模型...")
@@ -225,7 +250,21 @@ class SpeakerSeparator:
         """
         return None
 
-    def cluster_speakers(self, filename: str, threshold: float = 0.75):
+    @staticmethod
+    def _compute_audio_hash(filename: str) -> str:
+        hasher = hashlib.sha256()
+        with open(filename, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+
+    def cluster_speakers(
+        self,
+        filename: str,
+        threshold: float = 0.75,
+        namespace: str = None,
+        cross_run_threshold: float = None,
+    ):
         """
         用 embedding 做层次聚类，threshold 控制合并阈值（余弦距离）。
         返回 {cluster_id: [(start,end), ...], ...}
@@ -248,6 +287,8 @@ class SpeakerSeparator:
             if emb.ndim != 1:
                 emb = emb.reshape(-1)
             emb_list.append(emb)
+        if not emb_list:
+            return {}
         X = np.stack(emb_list, axis=0).astype(np.float32, copy=False)
         # 3. 聚类
         # sklearn 新版本用 metric，老版本用 affinity；这里做兼容
@@ -266,7 +307,54 @@ class SpeakerSeparator:
                 distance_threshold=threshold,
             )
         labels = clustering.fit_predict(X)
-        # 4. 构建结果
+        # 4. 构建结果（可选跨运行合并）
+        if self.mysql_store is not None and self.mysql_store.enabled:
+            namespace = namespace or self.mysql_namespace
+            effective_cross_run_threshold = (
+                cross_run_threshold
+                if cross_run_threshold is not None
+                else self.cross_run_threshold
+            )
+            local_stats = {}
+            for idx, label in enumerate(labels):
+                label = int(label)
+                if label not in local_stats:
+                    local_stats[label] = {
+                        "sum": np.zeros_like(emb_list[idx]),
+                        "count": 0,
+                    }
+                local_stats[label]["sum"] += emb_list[idx]
+                local_stats[label]["count"] += 1
+            for label, stats in local_stats.items():
+                stats["centroid"] = stats["sum"] / max(stats["count"], 1)
+
+            mapping = self.mysql_store.match_and_update_clusters(
+                local_stats,
+                namespace=namespace,
+                similarity_threshold=effective_cross_run_threshold,
+            )
+            global_ids = [
+                int(mapping.get(int(label), int(label))) for label in labels
+            ]
+            try:
+                audio_key = self._compute_audio_hash(filename)
+            except Exception:
+                audio_key = os.path.abspath(filename)
+            self.mysql_store.save_segments(
+                audio_key,
+                segments,
+                emb_list,
+                global_ids,
+                namespace=namespace,
+            )
+
+            clusters = {}
+            for turn, global_id in zip(segments, global_ids):
+                clusters.setdefault(global_id, []).append(
+                    (turn.start, turn.end)
+                )
+            return clusters
+
         clusters = {}
         for turn, label in zip(segments, labels):
             clusters.setdefault(label, []).append((turn.start, turn.end))

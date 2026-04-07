@@ -4,6 +4,7 @@ import datetime
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -208,26 +209,33 @@ def load_config(config_path, logger=None):
         raise
 
 
-def run_step(name, cmd, logger):
-    """执行步骤，带错误处理和日志记录"""
+def run_step(name, cmd, logger, capture_output=True):
+    """执行步骤，带错误处理和日志记录。
+
+    capture_output: 为 True 时捕获子进程输出，失败时写入日志；为 False 时
+    子进程 stdout/stderr 直接输出到当前控制台（用于训练等需实时查看 loss 的步骤）。
+    """
     logger.info(f"=== 开始步骤: {name} ===")
     logger.info(f"命令: {' '.join(cmd)}")
     try:
         result = subprocess.run(
-            cmd, check=True, capture_output=True, text=True
+            cmd,
+            check=True,
+            capture_output=capture_output,
+            text=True if capture_output else None,
         )
-        if result.stdout:
+        if capture_output and result.stdout:
             logger.debug(f"步骤 {name} 输出:\n{result.stdout}")
         logger.info(f"=== 步骤 {name} 完成 ===\n")
         return True
     except subprocess.CalledProcessError as e:
         error_msg = f"步骤 {name} 失败，退出码: {e.returncode}"
         logger.error(error_msg)
-        if e.stdout:
-            logger.error(f"标准输出:\n{e.stdout}")
-        if e.stderr:
-            logger.error(f"标准错误:\n{e.stderr}")
-        # 打印完整的堆栈跟踪
+        if capture_output:
+            if e.stdout:
+                logger.error(f"标准输出:\n{e.stdout}")
+            if e.stderr:
+                logger.error(f"标准错误:\n{e.stderr}")
         logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
         raise
     except Exception as e:
@@ -347,6 +355,8 @@ if __name__ == "__main__":
     annotation_ratio = iteration.get("annotation_ratio", 0.0)
     skip_manifest = iteration.get("skip_manifest", False)
     stop_after_labels = iteration.get("stop_after_labels", False)
+    # 新增：允许跳过自动标注步骤，直接从已有标签开始构建清单和训练
+    skip_labeling = iteration.get("skip_labeling", False)
 
     # 获取脚本目录
     base = os.path.dirname(__file__)
@@ -470,52 +480,57 @@ if __name__ == "__main__":
                                 logger,
                             )
 
-                # 1. 自动标注：始终调用，让 labeler.py 自行跳过已标注文件
-                # 支持使用微调后的模型进行标注（自迭代功能）
-                max_samples = 0  # 不限制标注样本数
-                temperature = labeling.get("temperature", 1.0)
-                # 支持指定设备，-1 表示 CPU，>=0 表示 GPU 设备编号
-                device = labeling.get("device", -1)
-                # 优先使用上轮模型，否则使用配置模型
-                labeling_model = (
-                    prev_model
-                    if prev_model
-                    else labeling.get(
-                        "model_name_or_path",
-                        "openai/whisper-large-v3-turbo",
+                # 1. 自动标注（可选）：根据 skip_labeling 决定是否执行
+                # 默认行为与之前保持一致：若未启用 skip_labeling，则始终尝试自动标注，
+                # 由 labeler.py 自行跳过已存在的非空标注文件。
+                if skip_labeling:
+                    logger.info("已启用 skip_labeling，跳过自动标注步骤，直接使用现有标签。")
+                else:
+                    # 支持使用微调后的模型进行标注（自迭代功能）
+                    max_samples = 0  # 不限制标注样本数
+                    temperature = labeling.get("temperature", 1.0)
+                    # 支持指定设备，-1 表示 CPU，>=0 表示 GPU 设备编号
+                    device = labeling.get("device", -1)
+                    # 优先使用上轮模型，否则使用配置模型
+                    labeling_model = (
+                        prev_model
+                        if prev_model
+                        else labeling.get(
+                            "model_name_or_path",
+                            "openai/whisper-large-v3-turbo",
+                        )
                     )
-                )
-                compression_ratio_threshold = str(
-                    labeling.get("compression_ratio_threshold", 1.35)
-                )
-                logprob_threshold = str(
-                    labeling.get("logprob_threshold", -1.0)
-                )
-                logger.info(f"使用标注模型: {labeling_model}")
-                run_step(
-                    "标签生成",
-                    [
-                        sys.executable,
-                        labeler_script,
-                        "--audio_dir",
-                        audio_dir,
-                        "--labels_dir",
-                        labels_dir,
-                        "--model_name_or_path",
-                        labeling_model,
-                        "--device",
-                        str(device),
-                        "--compression_ratio_threshold",
-                        compression_ratio_threshold,
-                        "--logprob_threshold",
-                        logprob_threshold,
-                        "--max_samples",
-                        str(max_samples),
-                        "--temperature",
-                        str(temperature),
-                    ],
-                    logger,
-                )
+                    compression_ratio_threshold = str(
+                        labeling.get("compression_ratio_threshold", 1.35)
+                    )
+                    logprob_threshold = str(
+                        labeling.get("logprob_threshold", -1.0)
+                    )
+                    logger.info(f"使用标注模型: {labeling_model}")
+                    run_step(
+                        "标签生成",
+                        [
+                            sys.executable,
+                            labeler_script,
+                            "--audio_dir",
+                            audio_dir,
+                            "--labels_dir",
+                            labels_dir,
+                            "--model_name_or_path",
+                            labeling_model,
+                            "--device",
+                            str(device),
+                            "--compression_ratio_threshold",
+                            compression_ratio_threshold,
+                            "--logprob_threshold",
+                            logprob_threshold,
+                            "--max_samples",
+                            str(max_samples),
+                            "--temperature",
+                            str(temperature),
+                        ],
+                        logger,
+                    )
 
                 # 2. 构建清单（可跳过）
                 if skip_manifest:
@@ -563,6 +578,11 @@ if __name__ == "__main__":
                     ):
                         logger.error("清单为空，标签生成或数据管理未产生任何数据，终止流程。")
                         sys.exit(1)
+                    # 清单已重建，删除训练检查点以便本轮从头训练（避免沿用旧检查点导致数据与参数不一致）
+                    checkpoint_dir = os.path.join(model_dir, "checkpoint")
+                    if os.path.isdir(checkpoint_dir):
+                        shutil.rmtree(checkpoint_dir)
+                        logger.info(f"已删除检查点目录 {checkpoint_dir}，本轮训练将从头开始")
 
                 # 抽取部分标签用于人工标注
                 if annotation_ratio > 0:
@@ -765,7 +785,8 @@ if __name__ == "__main__":
                 if training.get("save_merged_model", False):
                     train_cmd.append("--save_merged_model")
 
-                run_step("模型训练", train_cmd, logger)
+                # 训练步骤不捕获输出，便于在控制台查看每个 epoch 的 loss
+                run_step("模型训练", train_cmd, logger, capture_output=False)
 
                 # 5. 模型评估
                 eval_cmd = [

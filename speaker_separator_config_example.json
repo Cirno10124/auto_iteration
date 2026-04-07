@@ -2,5 +2,25 @@
   "model_revision": "pyannote/speaker-diarization@2.1",
   "hf_token": "your_token_here",
   "device": "cuda",
-  "snr_threshold": 20
+  "snr_threshold": 20,
+  "cross_run_threshold": 0.85,
+  "mysql": {
+    "enabled": false,
+    "namespace": "default",
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password": "",
+    "database": "",
+    "charset": "utf8mb4",
+    "databases": {}
+  },
+  "api": {
+    "token": "replace-with-your-token",
+    "host": "0.0.0.0",
+    "port": 8000,
+    "port_max_tries": 20,
+    "jobs_dir": "",
+    "max_upload_mb": 512
+  }
 }

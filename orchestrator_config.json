@@ -1,8 +1,8 @@
 {
   "paths": {
-    "raw_audio_dir": "tests/test_audio",
+    "raw_audio_dir": "",
     "split_script": "",
-    "audio_dir": "audio_chunks",
+    "audio_dir": "/home/cirno/recognizer_server/speaker_separator_env/out-speakers-jovo/",
     "labels_dir": "labels",
     "manifest_dir": "manifests",
     "model_dir": "out/model",
@@ -16,16 +16,16 @@
     "merge_threshold": 15
   },
   "labeling": {
-    "model_name_or_path": "openai/whisper-large-v3-turbo",
+    "model_name_or_path": "openai/whisper-large-v3",
     "compression_ratio_threshold": 1.35,
     "logprob_threshold": -1.0,
-    "max_samples": 100,
-    "temperature": 1.0,
+    "max_samples": -1,
+    "temperature": 0.7,
     "device": 0
   },
   "training": {
     "model_name_or_path": "openai/whisper-large-v3-turbo",
-    "num_train_epochs": 3,
+    "num_train_epochs": 8,
     "train_batch_size": 4,
     "eval_batch_size": 4,
     "mixed_precision": "fp16",
@@ -40,15 +40,15 @@
   },
   "iteration": {
     "interval": 86400,
-    "once": false,
+    "once": true,
+    "skip_labeling": true,
+    "skip_manifest": true,
     "test_size": 0,
     "annotation_ratio": 0.0,
-    "skip_manifest": false,
-    "stop_after_labels": false
+    
   },
   "speakers": {
-    "speaker_01": "tests/test_audio/speaker_01",
-    "speaker_02": "tests/test_audio/speaker_02"
+    
   },
   "logging": {
     "log_dir": "logs",

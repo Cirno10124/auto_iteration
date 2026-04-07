@@ -5,11 +5,10 @@ from collections import defaultdict, namedtuple
 
 import numpy as np
 import pytest
-import soundfile as sf  # type: ignore
+import soundfile as sf  # noqa: E402, F401, F403, E0401  # type: ignores
 
 # 对齐 test_speaker_separator.py：确保导入的是项目内的 speaker_separator.py
 sys.path.insert(0, os.getcwd())
-
 from speaker_separator import DummyEmbedder
 
 

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/json",
+  "audioRoot": "./data/audio",
+  "tasksFile": "./data/tasks.json",
+  "annotationsFile": "./data/annotations.json",
+  "serverPort": 3100,
+  "forwardSeconds": 3,
+  "backwardSeconds": 3,
+  "defaultPlaybackRate": 1.0
+}

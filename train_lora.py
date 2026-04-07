@@ -25,6 +25,13 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
+try:
+    import opencc
+
+    _opencc_converter = opencc.OpenCC("t2s")
+except Exception:
+    _opencc_converter = None
+
 # Monkey-patch PeftModel to drop input_ids and inputs_embeds
 _orig_peft_forward = peft.PeftModel.forward
 
@@ -36,6 +43,43 @@ def _patched_peft_forward(self, *args, **kwargs):
 
 
 peft.PeftModel.forward = _patched_peft_forward
+
+
+def normalize_zh_text(text: str) -> str:
+    """将文本统一为简体中文，并去除标点和空白，仅保留中英文和数字。"""
+    if not isinstance(text, str):
+        return ""
+    text = text.strip()
+    if not text:
+        return ""
+
+    if _opencc_converter is not None:
+        try:
+            text = _opencc_converter.convert(text)
+        except Exception:
+            pass
+
+    text = text.lower()
+    text = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]", "", text)
+    return text
+
+
+def normalize_manifest_text(example: Dict[str, Any]) -> Dict[str, Any]:
+    """仅修改入内存样本文本，不改动源 manifest 文件。"""
+    if "text" in example:
+        example["text"] = normalize_zh_text(example.get("text", ""))
+    if "transcript" in example:
+        example["transcript"] = normalize_zh_text(
+            example.get("transcript", "")
+        )
+    return example
+
+
+def has_non_empty_text(example: Dict[str, Any]) -> bool:
+    """过滤规范化后为空文本的样本。"""
+    text = (example.get("text") or "").strip()
+    transcript = (example.get("transcript") or "").strip()
+    return bool(text or transcript)
 
 
 def setup_logging():
@@ -100,23 +144,62 @@ class SpeechSeq2SeqCollator:
 def prepare_dataset(batch, processor, sampling_rate=16000):
     """准备数据集，只支持 Whisper"""
     audio_fp = batch.get("audio_filepath") or batch.get("audio_file")
-    data, sr = sf.read(audio_fp, dtype="float32")
-    if sr != sampling_rate:
+    batch["is_valid"] = True
+    batch["skip_reason"] = ""
+    if not audio_fp or not os.path.exists(audio_fp):
+        batch["is_valid"] = False
+        batch["skip_reason"] = f"audio not found: {audio_fp}"
+        batch["input_features"] = []
+        batch["labels"] = []
+        return batch
+
+    try:
         import numpy as np
 
-        data = np.interp(
-            np.linspace(0, len(data), int(len(data) * sampling_rate / sr)),
-            np.arange(len(data)),
-            data,
-        )
-    processed = processor(data, sampling_rate=sampling_rate)
-    batch["input_features"] = processed.input_features[0]
-    labels = processor.tokenizer(batch["text"]).input_ids
-    eos_id = processor.tokenizer.eos_token_id
-    if labels[-1] != eos_id:
-        labels.append(eos_id)
-    batch["labels"] = labels
-    return batch
+        data, sr = sf.read(audio_fp, dtype="float32")
+        # 多通道转单通道，避免后续特征提取维度异常
+        if getattr(data, "ndim", 1) > 1:
+            data = data.mean(axis=1)
+        if len(data) == 0 or sr <= 0:
+            raise ValueError(
+                f"empty audio or invalid sample rate: len={len(data)}, sr={sr}"
+            )
+        if sr != sampling_rate:
+            data = np.interp(
+                np.linspace(0, len(data), int(len(data) * sampling_rate / sr)),
+                np.arange(len(data)),
+                data,
+            ).astype("float32")
+
+        processed = processor(data, sampling_rate=sampling_rate)
+        input_features = np.asarray(processed.input_features[0], dtype=np.float32)
+        if input_features.ndim != 2:
+            raise ValueError(
+                f"processor returned invalid input_features shape: {input_features.shape}"
+            )
+        # 保持二维 mel 特征，Whisper 期望 [feature_bins, frames]（通常 80x3000）
+        batch["input_features"] = input_features.tolist()
+        # 使用 keyword 传参，兼容 transformers tokenizer 要求；并兼容可能的列名 transcript
+        text = (batch.get("text") or batch.get("transcript") or "").strip()
+        if not text:
+            batch["is_valid"] = False
+            batch["skip_reason"] = "empty normalized text"
+            batch["input_features"] = [[0.0]]
+            batch["labels"] = []
+            return batch
+        labels = processor.tokenizer(text=text).input_ids
+        eos_id = processor.tokenizer.eos_token_id
+        if labels and labels[-1] != eos_id:
+            labels.append(eos_id)
+        batch["labels"] = [int(x) for x in labels]
+        return batch
+    except Exception as e:
+        batch["is_valid"] = False
+        batch["skip_reason"] = f"{type(e).__name__}: {e}"
+        # 占位值也保持同类型：list[list[float]]，与有效样本一致
+        batch["input_features"] = [[0.0]]
+        batch["labels"] = []
+        return batch
 
 
 def save_checkpoint(
@@ -134,12 +217,18 @@ def save_checkpoint(
     checkpoint_dir = os.path.join(output_dir, "checkpoint")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # 保存模型状态
+    # 保存模型状态（必须保存 PeftModel 适配器，否则恢复时会是 0 可训练参数）
     if accelerator is not None:
         unwrapped_model = accelerator.unwrap_model(model)
     else:
         unwrapped_model = model
-    unwrapped_model.save_pretrained(checkpoint_dir)
+    # 若被 ModelWrapper 包装，保存内部的 PeftModel，否则保存的可能是错误结构
+    to_save = (
+        unwrapped_model.base_model
+        if isinstance(unwrapped_model, ModelWrapper)
+        else unwrapped_model
+    )
+    to_save.save_pretrained(checkpoint_dir)
 
     # 保存优化器和调度器状态（需要转换为可序列化的格式）
     # 注意：优化器和调度器的状态字典可能包含不可序列化的对象
@@ -326,6 +415,11 @@ def main():
     parser.add_argument(
         "--save_merged_model", action="store_true", help="保存合并后的完整模型"
     )
+    parser.add_argument(
+        "--no_resume_from_checkpoint",
+        action="store_true",
+        help="不恢复检查点，从头训练（重写标签/重建清单后建议使用）",
+    )
     args = parser.parse_args()
 
     logger = setup_logging()
@@ -348,6 +442,16 @@ def main():
         "test": args.test_manifest,
     }
     datasets = load_dataset("csv", data_files=data_files)
+    datasets = datasets.map(normalize_manifest_text, num_proc=1)
+    before_text_filter_sizes = {k: len(v) for k, v in datasets.items()}
+    datasets = datasets.filter(has_non_empty_text, num_proc=1)
+    after_text_filter_sizes = {k: len(v) for k, v in datasets.items()}
+    for split in before_text_filter_sizes:
+        dropped = before_text_filter_sizes[split] - after_text_filter_sizes[split]
+        if dropped > 0:
+            logger.warning(
+                f"{split} 集过滤掉 {dropped} 条规范化后空文本样本"
+            )
 
     # 加载 Whisper 处理器和模型
     try:
@@ -366,15 +470,26 @@ def main():
         )
         processor = WhisperProcessor(feature_extractor=fe, tokenizer=tok)
 
-    # 检查是否有检查点
-    (
-        checkpoint_dir,
-        opt_state,
-        sched_state,
-        start_epoch,
-        start_step,
-        best_metric,
-    ) = load_checkpoint(args.output_dir, logger)
+    # 检查是否有检查点（可通过 --no_resume_from_checkpoint 强制从头训练）
+    if args.no_resume_from_checkpoint:
+        checkpoint_dir, opt_state, sched_state, start_epoch, start_step, best_metric = (
+            None,
+            None,
+            None,
+            0,
+            0,
+            None,
+        )
+        logger.info("已指定 --no_resume_from_checkpoint，将从头训练，不加载检查点")
+    else:
+        (
+            checkpoint_dir,
+            opt_state,
+            sched_state,
+            start_epoch,
+            start_step,
+            best_metric,
+        ) = load_checkpoint(args.output_dir, logger)
 
     if checkpoint_dir:
         # 从检查点加载模型
@@ -383,6 +498,7 @@ def main():
                 args.model_name_or_path
             ),
             checkpoint_dir,
+            is_trainable=True,
         )
         logger.info("从检查点加载模型")
     else:
@@ -390,19 +506,31 @@ def main():
         model = WhisperForConditionalGeneration.from_pretrained(
             args.model_name_or_path
         )
-        modules = [
-            m.strip() for m in args.target_modules.split(",") if m.strip()
-        ]
-        lora_config = LoraConfig(
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            target_modules=modules,
-            lora_dropout=args.lora_dropout,
-            bias="none",
-            task_type="SEQ_2_SEQ_LM",
+        if hasattr(model, "peft_config"):
+            # 避免重复注入 LoRA，导致 multiple adapters 警告与训练行为混乱
+            logger.warning(
+                "检测到输入模型已包含 peft_config，跳过再次注入 LoRA 适配器，将直接继续训练现有适配器。"
+            )
+        else:
+            modules = [
+                m.strip() for m in args.target_modules.split(",") if m.strip()
+            ]
+            lora_config = LoraConfig(
+                r=args.lora_r,
+                lora_alpha=args.lora_alpha,
+                target_modules=modules,
+                lora_dropout=args.lora_dropout,
+                bias="none",
+                task_type="SEQ_2_SEQ_LM",
+            )
+            model = get_peft_model(model, lora_config)
+            logger.info("创建新的 LoRA 模型")
+
+    if hasattr(model, "peft_config"):
+        peft_adapters = list(getattr(model, "peft_config", {}).keys())
+        logger.info(
+            f"当前模型已加载 PEFT 适配器: {peft_adapters if peft_adapters else ['default']}"
         )
-        model = get_peft_model(model, lora_config)
-        logger.info("创建新的 LoRA 模型")
 
     # 补丁 base_model.forward
     orig_base_forward = model.base_model.forward
@@ -423,6 +551,12 @@ def main():
     logger.info(
         f"可训练参数: {trainable_params}/{total_params} ({100*trainable_params/total_params:.2f}%)"
     )
+    if trainable_params == 0:
+        logger.error(
+            "可训练参数为 0，无法训练。若从检查点恢复，可能是检查点损坏或未正确保存 LoRA 适配器；"
+            "请使用 --no_resume_from_checkpoint 从头训练，或检查 output_dir/checkpoint 下是否有 adapter_config.json 与 adapter_model.safetensors。"
+        )
+        raise RuntimeError("可训练参数为 0，训练已中止")
 
     model = ModelWrapper(model)
     if args.gradient_checkpointing:
@@ -430,11 +564,36 @@ def main():
         logger.info("已启用梯度检查点")
 
     # 数据预处理
+    source_columns = set()
+    for split in datasets.keys():
+        source_columns.update(datasets[split].column_names)
+    removable_columns = [
+        c
+        for c in ["audio_filepath", "audio_file", "text", "transcript"]
+        if c in source_columns
+    ]
     datasets = datasets.map(
         lambda b: prepare_dataset(b, processor),
-        remove_columns=["audio_filepath", "text"],
+        remove_columns=removable_columns,
         num_proc=1,
     )
+    if "is_valid" in datasets["train"].column_names:
+        before_sizes = {k: len(v) for k, v in datasets.items()}
+        datasets = datasets.filter(lambda b: b["is_valid"], num_proc=1)
+        after_sizes = {k: len(v) for k, v in datasets.items()}
+        for split in before_sizes:
+            dropped = before_sizes[split] - after_sizes[split]
+            if dropped > 0:
+                logger.warning(
+                    f"{split} 集过滤掉 {dropped} 条无法读取/无效音频样本"
+                )
+        extra_cols = [
+            c
+            for c in ["is_valid", "skip_reason"]
+            if c in datasets["train"].column_names
+        ]
+        if extra_cols:
+            datasets = datasets.remove_columns(extra_cols)
 
     data_collator = SpeechSeq2SeqCollator(
         processor=processor, padding=True
@@ -519,8 +678,20 @@ def main():
                 "input_features": batch["input_features"],
                 "labels": batch["labels"],
             }
+            # 跳过全为 padding 的 batch（labels 全为 -100），否则 loss 无 grad_fn 会报错
+            labels = batch["labels"]
+            if (labels == -100).all():
+                logger.warning(
+                    f"Epoch {epoch+1} step {step}: 跳过全为 padding 的 batch (labels 全为 -100)"
+                )
+                continue
             outputs = model(**inputs)
             loss = outputs.loss
+            if not loss.requires_grad:
+                logger.warning(
+                    f"Epoch {epoch+1} step {step}: loss 未参与计算图 (requires_grad=False)，跳过本 step 避免 backward 报错"
+                )
+                continue
             loss = loss / args.gradient_accumulation_steps
             accelerator.backward(loss)
 
@@ -601,8 +772,10 @@ def main():
                 refs_clean = [
                     re.sub(r"<\|.*?\|>", "", r).strip() for r in refs
                 ]
-                all_preds.extend(preds)
-                all_labels.extend(refs_clean)
+                all_preds.extend([normalize_zh_text(p) for p in preds])
+                all_labels.extend(
+                    [normalize_zh_text(r) for r in refs_clean]
+                )
 
         # 计算评估指标
         if args.eval_metric.lower() == "wer":
