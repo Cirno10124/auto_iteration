@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import hashlib
 import json
+import logging
 import os
+
+_log = logging.getLogger(__name__)
 
 # 兼容补丁：speechbrain 在导入时会调用 torchaudio.list_audio_backends()
 # 某些环境的 torchaudio 可能缺失该 API（版本不匹配或被同名模块覆盖），导致 pyannote diarization pipeline 无法加载。
@@ -35,12 +38,12 @@ except Exception:
     # 没有 torchaudio 或导入失败时不处理，让后续按原始错误提示
     pass
 
-import librosa  # noqa: E0401
-import noisereduce  # noqa: E0401
-import numpy as np
-import torch  # noqa: E0401
-from pyannote.audio import Pipeline  # noqa: E0401
-from sklearn.cluster import AgglomerativeClustering
+import librosa  # noqa: E0401, E402
+import noisereduce  # noqa: E0401, E402
+import numpy as np  # noqa: E402
+import torch  # noqa: E0401, E402
+from pyannote.audio import Pipeline  # noqa: E0401, E402
+from sklearn.cluster import AgglomerativeClustering  # noqa: E402
 
 try:
     from mysql_embedding_store import MySQLEmbeddingStore
@@ -160,6 +163,9 @@ class SpeakerSeparator:
         device: str = "cuda",
         snr_threshold: float = 20,
     ):
+        # 优先支持环境变量注入敏感信息，避免硬编码 token。
+        if hf_token is None:
+            hf_token = os.environ.get("HF_HUB_TOKEN")
         # 从配置文件加载参数
         config_path = os.path.join(
             os.path.dirname(__file__), "speaker_separator_config.json"
@@ -181,7 +187,10 @@ class SpeakerSeparator:
                 mysql_config = cfg.get("mysql", mysql_config)
                 mysql_namespace = mysql_config.get("namespace", mysql_namespace)
             except Exception as e:
-                print(f"警告：加载配置文件失败，将使用默认参数: {e}")
+                _log.warning(
+                    "加载 speaker_separator 配置文件失败，将使用默认参数: %s",
+                    e,
+                )
 
         if isinstance(device, str):
             device = torch.device(device)
@@ -204,16 +213,18 @@ class SpeakerSeparator:
             )
 
         # 加载说话人分离模型
-        print("正在加载 pyannote.audio 说话人分离模型...")
+        _log.info("正在加载 pyannote.audio 说话人分离模型: %s", model_revision)
         try:
             self.pipeline = Pipeline.from_pretrained(
                 model_revision, token=hf_token
             )
             self.pipeline.to(device)
-            print("模型加载完成")
+            _log.info("pyannote 说话人分离模型加载完成")
         except Exception as e:
-            print(f"错误：无法加载 pyannote.audio 模型: {e}")
-            print("请检查：1) HF_HUB_TOKEN 是否正确设置；2) 网络连接；3) CUDA 可用性")
+            _log.error(
+                "无法加载 pyannote.audio 模型: %s | 请检查 HF_HUB_TOKEN、网络、CUDA",
+                e,
+            )
             raise
 
         # 源分离功能暂不支持
