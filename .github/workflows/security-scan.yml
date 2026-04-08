@@ -1,0 +1,104 @@
+name: Security Scan
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 每月 1 号 UTC 02:00
+    - cron: "0 2 1 * *"
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-deps-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - name: Run pip-audit (JSON report)
+        run: |
+          pip-audit -r requirements.txt -f json -o pip-audit-report.json || true
+
+      - name: Summarize pip-audit
+        run: |
+          python - <<'PY'
+          import json, os
+          p = "pip-audit-report.json"
+          if not os.path.exists(p):
+            print("pip-audit report missing")
+            raise SystemExit(0)
+          data = json.load(open(p, "r", encoding="utf-8"))
+          # pip-audit JSON is typically a list of deps with vulnerabilities
+          if isinstance(data, list):
+            vuln_count = sum(len(item.get("vulns", [])) for item in data if isinstance(item, dict))
+            pkg_count = sum(1 for item in data if isinstance(item, dict) and item.get("vulns"))
+          else:
+            vuln_count = 0
+            pkg_count = 0
+          print(f"pip-audit vulnerable packages: {pkg_count}")
+          print(f"pip-audit vulnerability records: {vuln_count}")
+          PY
+
+      - name: Upload pip-audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-report
+          path: pip-audit-report.json
+          if-no-files-found: ignore
+
+  node-deps-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: sign_tools/package-lock.json
+
+      - name: Install sign_tools dependencies
+        working-directory: sign_tools
+        run: npm ci
+
+      - name: Run npm audit (JSON report)
+        run: |
+          cd sign_tools
+          npm audit --json > ../npm-audit-report.json || true
+
+      - name: Summarize npm audit
+        run: |
+          python - <<'PY'
+          import json, os
+          p = "npm-audit-report.json"
+          if not os.path.exists(p):
+            print("npm audit report missing")
+            raise SystemExit(0)
+          data = json.load(open(p, "r", encoding="utf-8"))
+          meta = data.get("metadata", {}) if isinstance(data, dict) else {}
+          vul = meta.get("vulnerabilities", {}) if isinstance(meta, dict) else {}
+          print("npm audit vulnerabilities:")
+          for k in ("critical", "high", "moderate", "low", "info"):
+            print(f"  {k}: {vul.get(k, 0)}")
+          PY
+
+      - name: Upload npm-audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-report
+          path: npm-audit-report.json
+          if-no-files-found: ignore
