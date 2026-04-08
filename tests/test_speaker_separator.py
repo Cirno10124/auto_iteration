@@ -2,7 +2,13 @@ import os
 import sys # noqa: E401, F401, F403, E0401  # type: ignores
 from collections import namedtuple
 
-import torch  
+import pytest
+
+pytestmark = pytest.mark.heavy
+
+# 与 speaker_separator 顶层依赖一致；缺任一则跳过本模块（避免 CI 收集阶段 ImportError）
+for _dep in ("numpy", "torch", "librosa", "noisereduce", "pyannote.audio", "sklearn"):
+    pytest.importorskip(_dep)
 
 sys.path.insert(0, os.getcwd())
 from speaker_separator import SpeakerSeparator

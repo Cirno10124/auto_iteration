@@ -3,9 +3,16 @@ import os
 import sys
 from collections import defaultdict, namedtuple
 
-import numpy as np
 import pytest
-import soundfile as sf  # noqa: E402, F401, F403, E0401  # type: ignores
+
+pytestmark = pytest.mark.heavy
+pytest.importorskip("soundfile")
+import soundfile as sf  # noqa: E402
+
+for _dep in ("numpy", "torch", "librosa", "noisereduce", "pyannote.audio", "sklearn"):
+    pytest.importorskip(_dep)
+
+import numpy as np
 
 # 对齐 test_speaker_separator.py：确保导入的是项目内的 speaker_separator.py
 sys.path.insert(0, os.getcwd())
@@ -137,11 +144,20 @@ def test_ecapa_embedding_separates_speakers_on_small_zh_dataset():
 
     intra_mean = float(np.mean(intra))
     inter_mean = float(np.mean(inter))
-    # 先不对结果做硬性断言：不同数据/切分/时长可能导致统计差异。
-    # 这里仅输出统计信息，确保流程可跑通并便于人工观察。
     print(
         f"[verification] intra_mean={intra_mean:.6f} inter_mean={inter_mean:.6f} "
         f"(pairs: intra={len(intra)} inter={len(inter)})"
+    )
+
+    for _, emb in embs:
+        assert emb.size > 0
+        assert np.isfinite(emb).all()
+        assert float(np.linalg.norm(emb)) > 1e-8
+
+    assert np.isfinite(intra_mean) and np.isfinite(inter_mean)
+    assert intra_mean > inter_mean, (
+        "同一说话人样本对的平均余弦相似度应高于不同说话人对："
+        f"intra_mean={intra_mean:.6f}, inter_mean={inter_mean:.6f}"
     )
 
     # 最近邻同 speaker 命中率
@@ -164,4 +180,11 @@ def test_ecapa_embedding_separates_speakers_on_small_zh_dataset():
     print(
         f"[verification] nn_same_speaker_acc={acc:.3f} "
         f"(samples={len(embs)}, speakers={len(speaker_ids)})"
+    )
+
+    n_spk = max(len(speaker_ids), 1)
+    uniform_random_baseline = 1.0 / n_spk
+    assert acc > uniform_random_baseline, (
+        "最近邻同说话人命中率应优于「均匀随机猜说话人」基线 1/K："
+        f"acc={acc:.4f}, baseline={uniform_random_baseline:.4f}, K={n_spk}"
     )
