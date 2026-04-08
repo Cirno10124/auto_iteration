@@ -12,10 +12,16 @@ __pycache__/
 *.pyzwzwz
 *.pyzwzwzw
 *.pyzwzwzwz
-.gitignore
 *.wav
 *mp4
-speaker_separator_config.json
-record_control\
-speaker_separator_env\
+.coverage
+coverage.xml
+htmlcov/
 
+tests/logs/
+tests/manifests/
+tests/model/
+tests/labels/
+tests/audio_chunks/
+tests/ggml_model/
+tests/test_audio/
