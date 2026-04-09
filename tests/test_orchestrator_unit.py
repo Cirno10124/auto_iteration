@@ -4,10 +4,10 @@ import sys
 import pytest
 
 sys.path.insert(0, os.getcwd())
-from orchestrator import load_config
-from orchestrator_core.config_loader import apply_cli_overrides
-from orchestrator_core.context import build_speaker_list
-from orchestrator_core.paths import PROJECT_ROOT
+from orchestrator import load_config  # noqa: E402
+from orchestrator_core.config_loader import apply_cli_overrides  # noqa: E402
+from orchestrator_core.context import build_speaker_list  # noqa: E402
+from orchestrator_core.paths import PROJECT_ROOT  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -46,7 +46,11 @@ def test_apply_cli_overrides_nested_and_types():
     cfg = {"paths": {"audio_dir": "a"}, "iteration": {"once": False}}
     apply_cli_overrides(
         cfg,
-        ["paths.audio_dir=/tmp/x", "iteration.once=true", "iteration.max_iterations=3"],
+        [
+            "paths.audio_dir=/tmp/x",
+            "iteration.once=true",
+            "iteration.max_iterations=3",
+        ],
     )
     assert cfg["paths"]["audio_dir"] == "/tmp/x"
     assert cfg["iteration"]["once"] is True

@@ -9,14 +9,21 @@ pytestmark = pytest.mark.heavy
 pytest.importorskip("soundfile")
 import soundfile as sf  # noqa: E402
 
-for _dep in ("numpy", "torch", "librosa", "noisereduce", "pyannote.audio", "sklearn"):
+for _dep in (
+    "numpy",
+    "torch",
+    "librosa",
+    "noisereduce",
+    "pyannote.audio",
+    "sklearn",
+):
     pytest.importorskip(_dep)
 
-import numpy as np
+import numpy as np  # noqa: E402
 
 # 对齐 test_speaker_separator.py：确保导入的是项目内的 speaker_separator.py
 sys.path.insert(0, os.getcwd())
-from speaker_separator import DummyEmbedder
+from speaker_separator import DummyEmbedder  # noqa: E402
 
 
 def _find_manifest():
@@ -28,7 +35,8 @@ def _find_manifest():
         return env
 
     # 常见位置：
-    # - auto_iteration/out/aishell1_4x10/manifest.jsonl（在 auto_iteration 目录内执行脚本）
+    # - auto_iteration/out/aishell1_4x10/manifest.jsonl
+    #   （在 auto_iteration 目录内执行脚本）
     # - out/aishell1_4x10/manifest.jsonl（在仓库根目录执行脚本）
     base = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     candidates = [
@@ -119,7 +127,8 @@ def test_ecapa_embedding_separates_speakers_on_small_zh_dataset():
     short_500ms = int(np.sum(dur_values < 0.5))
     print(
         f"[data] duration_s: min={float(dur_values.min()):.4f} "
-        f"p50={float(np.median(dur_values)):.4f} max={float(dur_values.max()):.4f} "
+        f"p50={float(np.median(dur_values)):.4f} "
+        f"max={float(dur_values.max()):.4f} "
         f"(n={len(dur_values)}, <0.1s={short_100ms}, <0.5s={short_500ms})"
     )
     # 打印最短的几条，方便直接定位文件是否只有 1 个采样点/是否损坏
@@ -145,7 +154,8 @@ def test_ecapa_embedding_separates_speakers_on_small_zh_dataset():
     intra_mean = float(np.mean(intra))
     inter_mean = float(np.mean(inter))
     print(
-        f"[verification] intra_mean={intra_mean:.6f} inter_mean={inter_mean:.6f} "
+        f"[verification] intra_mean={intra_mean:.6f} "
+        f"inter_mean={inter_mean:.6f} "
         f"(pairs: intra={len(intra)} inter={len(inter)})"
     )
 

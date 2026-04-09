@@ -5,7 +5,11 @@ import sys
 import pytest
 
 sys.path.insert(0, os.getcwd())
-from dataset_manager import check_data_size, read_existing_csv, write_csv
+from dataset_manager import (  # noqa: E402
+    check_data_size,
+    read_existing_csv,
+    write_csv,
+)
 
 pytestmark = pytest.mark.unit
 
