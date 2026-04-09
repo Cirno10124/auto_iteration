@@ -68,11 +68,11 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: sign_tools/package-lock.json
+          cache-dependency-path: sign_tools/package.json
 
       - name: Install sign_tools dependencies
         working-directory: sign_tools
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Run npm audit (JSON report)
         run: |
