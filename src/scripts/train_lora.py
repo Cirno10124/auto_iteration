@@ -141,7 +141,9 @@ class SpeechSeq2SeqCollator:
         return batch
 
 
-def prepare_dataset(batch, processor, sampling_rate=16000):
+def prepare_dataset(
+    batch, processor, sampling_rate=16000, max_label_tokens=448
+):
     """准备数据集，只支持 Whisper"""
     audio_fp = batch.get("audio_filepath") or batch.get("audio_file")
     batch["is_valid"] = True
@@ -188,6 +190,14 @@ def prepare_dataset(batch, processor, sampling_rate=16000):
             batch["labels"] = []
             return batch
         labels = processor.tokenizer(text=text).input_ids
+        if len(labels) > max_label_tokens:
+            batch["is_valid"] = False
+            batch["skip_reason"] = (
+                f"label too long: {len(labels)} tokens > {max_label_tokens}"
+            )
+            batch["input_features"] = [[0.0]]
+            batch["labels"] = []
+            return batch
         eos_id = processor.tokenizer.eos_token_id
         if labels and labels[-1] != eos_id:
             labels.append(eos_id)
@@ -392,6 +402,12 @@ def main():
     parser.add_argument("--warmup_steps", type=int, default=500)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument(
+        "--max_label_tokens",
+        type=int,
+        default=448,
+        help="训练前过滤超长标签样本，标签 token 上限（不含自动补充的 EOS）",
+    )
+    parser.add_argument(
         "--checkpoint_steps",
         type=int,
         default=None,
@@ -587,7 +603,9 @@ def main():
         if c in source_columns
     ]
     datasets = datasets.map(
-        lambda b: prepare_dataset(b, processor),
+        lambda b: prepare_dataset(
+            b, processor, max_label_tokens=args.max_label_tokens
+        ),
         remove_columns=removable_columns,
         num_proc=1,
         load_from_cache_file=False,
@@ -602,7 +620,7 @@ def main():
             dropped = before_sizes[split] - after_sizes[split]
             if dropped > 0:
                 logger.warning(
-                    f"{split} 集过滤掉 {dropped} 条无法读取/无效音频样本"
+                    f"{split} 集过滤掉 {dropped} 条无效样本（含音频异常、空文本、超长标签）"
                 )
         extra_cols = [
             c
