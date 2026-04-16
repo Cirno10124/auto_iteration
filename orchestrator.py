@@ -12,8 +12,8 @@ _SRC = os.path.join(_ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from orchestrator_core.config_loader import load_config
-from orchestrator_core.step_runner import run_step
+from orchestrator_core.config_loader import load_config  # noqa: E402
+from orchestrator_core.step_runner import run_step  # noqa: E402
 
 __all__ = ["load_config", "run_step"]
 
