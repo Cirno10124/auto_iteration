@@ -3,7 +3,10 @@ import os
 import pytest
 
 from orchestrator import load_config  # noqa: E402
-from orchestrator_core.config_loader import apply_cli_overrides  # noqa: E402
+from orchestrator_core.config_loader import (  # noqa: E402
+    apply_cli_overrides,
+    normalize_config_types,
+)
 from orchestrator_core.context import build_speaker_list  # noqa: E402
 from orchestrator_core.paths import PROJECT_ROOT  # noqa: E402
 
@@ -56,6 +59,23 @@ def test_apply_cli_overrides_nested_and_types():
     assert cfg["paths"]["audio_dir"] == "/tmp/x"
     assert cfg["iteration"]["once"] is True
     assert cfg["iteration"]["max_iterations"] == 3
+
+
+def test_normalize_config_types_iteration_bool_strings():
+    """字符串布尔值应在校验前被标准化。"""
+    cfg = {
+        "iteration": {
+            "once": "false",
+            "skip_manifest": "1",
+            "stop_after_labels": "0",
+            "skip_labeling": "true",
+        }
+    }
+    normalize_config_types(cfg)
+    assert cfg["iteration"]["once"] is False
+    assert cfg["iteration"]["skip_manifest"] is True
+    assert cfg["iteration"]["stop_after_labels"] is False
+    assert cfg["iteration"]["skip_labeling"] is True
 
 
 def test_build_speaker_list_empty_mapping_uses_raw_dir():

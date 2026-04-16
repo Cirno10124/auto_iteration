@@ -181,6 +181,42 @@ def load_config(config_path: str, logger: Any = None) -> Dict[str, Any]:
         raise
 
 
+def _parse_bool_like(value: Any) -> Any:
+    """将常见布尔字符串转换为 bool，其它值原样返回。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"true", "1", "yes", "y", "on"}:
+            return True
+        if v in {"false", "0", "no", "n", "off"}:
+            return False
+    return value
+
+
+def normalize_config_types(config: Dict[str, Any], logger: Any = None) -> None:
+    """标准化配置中的常见类型，减少外部配置格式差异导致的校验失败。"""
+    iteration = config.get("iteration")
+    if not isinstance(iteration, dict):
+        return
+
+    bool_keys = ["once", "skip_manifest", "stop_after_labels", "skip_labeling"]
+    changed_keys = []
+    for key in bool_keys:
+        if key not in iteration:
+            continue
+        before = iteration[key]
+        after = _parse_bool_like(before)
+        if before is not after:
+            iteration[key] = after
+            changed_keys.append(key)
+
+    if changed_keys:
+        _config_logger(logger).info(
+            "已自动标准化 iteration 布尔配置项: %s", ", ".join(changed_keys)
+        )
+
+
 def apply_cli_overrides(
     config: Dict[str, Any],
     overrides: Optional[List[str]],
@@ -219,3 +255,5 @@ def apply_cli_overrides(
             pass
         target[keys[-1]] = value
         log.info(f"已覆盖配置项 {key} = {value}")
+
+    normalize_config_types(config, logger=log)

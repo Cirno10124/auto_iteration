@@ -7,7 +7,11 @@ from typing import Optional
 
 from logging_utils import ensure_early_console_logging, setup_logging
 
-from orchestrator_core.config_loader import apply_cli_overrides, load_config
+from orchestrator_core.config_loader import (
+    apply_cli_overrides,
+    load_config,
+    normalize_config_types,
+)
 from orchestrator_core.config_validation import validate_config
 from orchestrator_core.context import build_speaker_list
 from orchestrator_core.paths import PROJECT_ROOT
@@ -52,6 +56,7 @@ def main(argv: Optional[list] = None) -> None:
         )
 
     config = load_config(config_path, logger=root_log)
+    normalize_config_types(config, logger=root_log)
 
     apply_cli_overrides(config, args.override, logger=root_log)
     errors = validate_config(config)
