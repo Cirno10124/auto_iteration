@@ -14,7 +14,7 @@ import soundfile as sf
 import torch
 import torch.nn as nn
 from accelerate import Accelerator
-from datasets import load_dataset
+from datasets import disable_caching, load_dataset
 from peft import LoraConfig, PeftModel, get_peft_model
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -420,9 +420,19 @@ def main():
         action="store_true",
         help="不恢复检查点，从头训练（重写标签/重建清单后建议使用）",
     )
+    parser.add_argument(
+        "--enable_hf_datasets_cache",
+        action="store_true",
+        help="启用 HuggingFace datasets 持久缓存（默认关闭以避免缓存膨胀）",
+    )
     args = parser.parse_args()
 
     logger = setup_logging()
+    if not args.enable_hf_datasets_cache:
+        disable_caching()
+        logger.info(
+            "已关闭 HuggingFace datasets 持久缓存（如需启用可加 --enable_hf_datasets_cache）"
+        )
 
     logger.info("=" * 60)
     logger.info("Whisper LoRA 微调训练开始")
@@ -442,9 +452,13 @@ def main():
         "test": args.test_manifest,
     }
     datasets = load_dataset("csv", data_files=data_files)
-    datasets = datasets.map(normalize_manifest_text, num_proc=1)
+    datasets = datasets.map(
+        normalize_manifest_text, num_proc=1, load_from_cache_file=False
+    )
     before_text_filter_sizes = {k: len(v) for k, v in datasets.items()}
-    datasets = datasets.filter(has_non_empty_text, num_proc=1)
+    datasets = datasets.filter(
+        has_non_empty_text, num_proc=1, load_from_cache_file=False
+    )
     after_text_filter_sizes = {k: len(v) for k, v in datasets.items()}
     for split in before_text_filter_sizes:
         dropped = before_text_filter_sizes[split] - after_text_filter_sizes[split]
@@ -576,10 +590,13 @@ def main():
         lambda b: prepare_dataset(b, processor),
         remove_columns=removable_columns,
         num_proc=1,
+        load_from_cache_file=False,
     )
     if "is_valid" in datasets["train"].column_names:
         before_sizes = {k: len(v) for k, v in datasets.items()}
-        datasets = datasets.filter(lambda b: b["is_valid"], num_proc=1)
+        datasets = datasets.filter(
+            lambda b: b["is_valid"], num_proc=1, load_from_cache_file=False
+        )
         after_sizes = {k: len(v) for k, v in datasets.items()}
         for split in before_sizes:
             dropped = before_sizes[split] - after_sizes[split]
@@ -646,7 +663,6 @@ def main():
     model, optimizer, train_loader, eval_loader = accelerator.prepare(
         model, optimizer, train_loader, eval_loader
     )
-    model = ModelWrapper(model)
     model.train()
 
     # 早停相关变量
@@ -661,6 +677,7 @@ def main():
     )
     patience_counter = 0
     global_step = start_step
+    first_no_grad_loss_logged = False
 
     # 训练循环
     for epoch in range(start_epoch, args.num_train_epochs):
@@ -688,6 +705,20 @@ def main():
             outputs = model(**inputs)
             loss = outputs.loss
             if not loss.requires_grad:
+                if not first_no_grad_loss_logged:
+                    first_no_grad_loss_logged = True
+                    trainable_tensors = sum(
+                        1 for p in model.parameters() if p.requires_grad
+                    )
+                    logger.warning(
+                        "梯度诊断 | torch.is_grad_enabled=%s | loss.grad_fn=%s | "
+                        "trainable_tensors=%s",
+                        torch.is_grad_enabled(),
+                        type(loss.grad_fn).__name__
+                        if loss.grad_fn is not None
+                        else "None",
+                        trainable_tensors,
+                    )
                 logger.warning(
                     f"Epoch {epoch+1} step {step}: loss 未参与计算图 (requires_grad=False)，跳过本 step 避免 backward 报错"
                 )

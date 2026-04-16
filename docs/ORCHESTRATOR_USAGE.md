@@ -10,7 +10,7 @@
 ## 运行方式
 
 ```bash
-python auto_iteration/orchestrator.py [选项]
+python orchestrator.py [选项]
 ```
 
 ## 参数说明
@@ -18,7 +18,7 @@ python auto_iteration/orchestrator.py [选项]
 | 参数                  | 类型     | 默认值      | 含义                                                                                 |
 |-----------------------|----------|-------------|--------------------------------------------------------------------------------------|
 | `--raw_audio_dir`     | str      | None        | 原始长音频目录，若提供则先进行 VAD 切分。                                              |
-| `--split_script`      | str      | 同脚本目录  | VAD 切分脚本路径（`split_audio.py`）。                                                |
+| `--split_script`      | str      | 同脚本目录  | VAD 切分脚本路径（`src/scripts/split_audio.py`）。                                        |
 | `--audio_dir`         | str      | `audio_chunks` | 音频切片输出目录。                                                                    |
 | `--labels_dir`        | str      | `labels`    | 自动标注结果输出目录。                                                                |
 | `--manifest_dir`      | str      | `manifests` | 数据清单（manifest）输出目录。                                                        |
@@ -34,9 +34,9 @@ python auto_iteration/orchestrator.py [选项]
 ## 使用示例
 
 ```bash
-python auto_iteration/orchestrator.py \
+python orchestrator.py \
   --raw_audio_dir /data/raw_audio \
-  --split_script /path/to/split_audio.py \
+  --split_script /path/to/src/scripts/split_audio.py \
   --audio_dir chunks \
   --labels_dir labels \
   --manifest_dir manifests \

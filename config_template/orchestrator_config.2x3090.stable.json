@@ -1,0 +1,64 @@
+{
+  "paths": {
+    "raw_audio_dir": "",
+    "split_script": "",
+    "audio_dir": "/exp/auto_iter/audio_chunks",
+    "labels_dir": "/exp/auto_iter/labels",
+    "manifest_dir": "/exp/auto_iter/manifests",
+    "model_dir": "/exp/auto_iter/model",
+    "ggml_dir": "/exp/auto_iter/ggml"
+  },
+  "audio_split": {
+    "sample_rate": 16000,
+    "frame_duration": 30,
+    "vad_aggressiveness": 2,
+    "min_segment_duration": 1500,
+    "merge_threshold": 15
+  },
+  "labeling": {
+    "model_name_or_path": "openai/whisper-large-v3",
+    "compression_ratio_threshold": 1.35,
+    "logprob_threshold": -1.0,
+    "max_samples": -1,
+    "temperature": 0.7,
+    "device": 0
+  },
+  "training": {
+    "model_name_or_path": "openai/whisper-large-v3-turbo",
+    "num_train_epochs": 8,
+    "train_batch_size": 6,
+    "eval_batch_size": 6,
+    "mixed_precision": "fp16",
+    "gradient_accumulation_steps": 2,
+    "gradient_checkpointing": true,
+    "learning_rate": 1e-4,
+    "warmup_steps": 500,
+    "weight_decay": 0.01,
+    "language": "zh",
+    "task": "transcribe",
+    "max_new_tokens": 256,
+    "no_repeat_ngram_size": 3,
+    "length_penalty": 1.2,
+    "eval_metric": "cer",
+    "repetition_penalty": 2.0,
+    "early_stopping_patience": 2,
+    "early_stopping_threshold": 0.0005,
+    "checkpoint_epochs": 0.25
+  },
+  "iteration": {
+    "interval": 0,
+    "once": true,
+    "max_iterations": 1,
+    "skip_labeling": false,
+    "skip_manifest": false,
+    "test_size": 0,
+    "annotation_ratio": 0.0,
+    "stop_after_labels": false
+  },
+  "speakers": {},
+  "logging": {
+    "log_dir": "/exp/auto_iter/logs",
+    "log_level": "INFO",
+    "log_file_prefix": "orchestrator_2x3090_stable"
+  }
+}

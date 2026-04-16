@@ -3,8 +3,8 @@ version: "3.9"
 services:
   orchestrator-gpu:
     build:
-      context: .
-      dockerfile: Dockerfile.gpu
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.gpu
     image: auto-iteration:gpu
     container_name: orchestrator-gpu
     gpus: all
@@ -14,10 +14,10 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
-      - ./:/workspace/auto_iteration
+      - ../../:/workspace/auto_iteration
     working_dir: /workspace/auto_iteration
     healthcheck:
-      test: ["CMD", "python3", "scripts/gpu_health_check.py"]
+      test: ["CMD", "python3", "src/scripts/gpu_health_check.py"]
       interval: 30s
       timeout: 15s
       retries: 3

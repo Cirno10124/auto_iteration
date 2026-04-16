@@ -2,7 +2,8 @@
 # 简易完整流程脚本：构建清单 → 训练 → 评估 → 转换
 # 依赖 orchestrator.py，通过 --config 与 --override 控制行为
 set -e
-cd "$(dirname "$0")"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${ROOT_DIR}"
 
 # 配置文件路径（可通过环境变量覆盖）
 CONFIG="${ORCHESTRATOR_CONFIG:-orchestrator_config.json}"

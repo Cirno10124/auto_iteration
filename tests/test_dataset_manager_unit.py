@@ -1,11 +1,8 @@
 import csv
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.getcwd())
-from dataset_manager import (  # noqa: E402
+from scripts.dataset_manager import (  # noqa: E402
     check_data_size,
     read_existing_csv,
     write_csv,
@@ -27,6 +24,7 @@ class DummyLogger:
 
 
 def test_read_existing_csv_skips_empty_transcript(tmp_path):
+    """读取 CSV 时跳过空 transcript 记录。"""
     csv_path = tmp_path / "train.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -41,6 +39,7 @@ def test_read_existing_csv_skips_empty_transcript(tmp_path):
 
 
 def test_write_csv_writes_header_and_rows(tmp_path):
+    """写入 CSV 时应包含表头和全部数据行。"""
     out = tmp_path / "out.csv"
     logger = DummyLogger()
     write_csv(str(out), [("x.wav", "text_x"), ("y.wav", "text_y")], logger)
@@ -52,6 +51,7 @@ def test_write_csv_writes_header_and_rows(tmp_path):
 
 
 def test_check_data_size_warns_for_small_or_empty():
+    """数据量为空或过小时应产生告警。"""
     logger = DummyLogger()
     check_data_size(0, "训练集", logger)
     check_data_size(5, "验证集", logger)

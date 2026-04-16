@@ -5,7 +5,7 @@
     // 原始长音频目录，若提供则自动分段
     "raw_audio_dir": "tests/test_audio",
 
-    // 可选：自定义切分脚本路径；为空时使用默认 split_audio.py
+    // 可选：自定义切分脚本路径；为空时使用默认 src/scripts/split_audio.py
     "split_script": "",
 
     // 分段后的音频输出目录
@@ -44,7 +44,7 @@
     "merge_threshold": 15
   },
 
-  // 标注配置：调用 labeler.py
+  // 标注配置：调用 src/scripts/labeler.py
   "labeling": {
     // Whisper 模型路径或名称，例如 Hugging Face ID
     "model_name_or_path": "openai/whisper-large-v3-turbo",
@@ -60,7 +60,7 @@
     "device": 0
   },
 
-  // 训练配置：调用 train_lora.py
+  // 训练配置：调用 src/scripts/train_lora.py
   "training": {
     "model_name_or_path": "openai/whisper-large-v3-turbo",
     "num_train_epochs": 3,

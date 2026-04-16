@@ -35,9 +35,12 @@ jobs:
     - name: Lint
       run: flake8 . --max-line-length=140 --extend-ignore=E203
 
-    - name: Test with coverage (exclude heavy)
+    - name: Enforce source layout
+      run: python src/scripts/check_source_layout.py
+
+    - name: Test with coverage
       run: |
-        pytest -m "not heavy" -q \
+        pytest -q \
           --cov=. \
           --cov-config=.coveragerc \
           --cov-report=term-missing \
@@ -45,8 +48,8 @@ jobs:
 
     - name: Smoke check GPU health script (no-GPU)
       run: |
-        python -m py_compile scripts/gpu_health_check.py
-        python scripts/gpu_health_check.py --help
+        python -m py_compile src/scripts/gpu_health_check.py
+        python src/scripts/gpu_health_check.py --help
 
     - name: Setup Node (sign_tools)
       uses: actions/setup-node@v4

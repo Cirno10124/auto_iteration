@@ -99,23 +99,23 @@ def run_orchestrator_loop(
 
     base = PROJECT_ROOT
     labeler_script = paths.get("labeler_script") or os.path.join(
-        base, "labeler.py"
+        base, "scripts", "labeler.py"
     )
     dataset_manager_script = paths.get(
         "dataset_manager_script"
-    ) or os.path.join(base, "dataset_manager.py")
+    ) or os.path.join(base, "scripts", "dataset_manager.py")
     train_script = paths.get("train_script") or os.path.join(
-        base, "train_lora.py"
+        base, "scripts", "train_lora.py"
     )
     evaluator_script = paths.get("evaluator_script") or os.path.join(
-        base, "evaluator.py"
+        base, "scripts", "evaluator.py"
     )
     converter_script = paths.get("converter_script") or os.path.join(
-        base, "converter.py"
+        base, "scripts", "converter.py"
     )
     split_script = paths.get("split_script")
     if not split_script:
-        split_script = os.path.join(base, "split_audio.py")
+        split_script = os.path.join(base, "scripts", "split_audio.py")
 
     logger.info("=" * 60)
     logger.info("自动化迭代流程开始")

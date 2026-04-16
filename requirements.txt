@@ -1,5 +1,5 @@
 # Python version: 3.11.13
-# 项目依赖（固定版本以匹配 lora_env.txt）
+# Project dependencies (pinned to match lora_env.txt)
 accelerate==1.10.1
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.2
@@ -106,7 +106,7 @@ regex==2025.10.23
 requests==2.32.5
 rich==14.2.0
 safetensors==0.6.2
-scikit-learn==1.7.2  # 用于说话人聚类
+scikit-learn==1.7.2  # for speaker clustering
 scipy==1.16.2
 shellingham==1.5.4
 six==1.17.0
@@ -135,10 +135,10 @@ webrtcvad==2.0.10
 xxhash==3.6.0
 yarl==1.22.0
 zipp==3.23.0
-# 添加说话人分离依赖
+# Speaker separation dependencies
 
-# 添加开发依赖以支持自动lint
+# Dev dependencies for automated linting
 pre-commit>=3.0.0
 isort==5.12.0
 autoflake==1.5.3
-# 合并 venv.txt 中的依赖（环境快照）
+# Merged dependencies from venv.txt (env snapshot)
