@@ -26,3 +26,4 @@ tests/audio_chunks/
 tests/ggml_model/
 tests/test_audio/
 thchs30/
+orchestrator_config.json

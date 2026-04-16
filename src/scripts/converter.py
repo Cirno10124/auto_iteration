@@ -3,6 +3,7 @@ import argparse
 import glob
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -53,6 +54,37 @@ def backup_files(model_dir, files_to_backup, logger):
         logger.error(f"备份文件失败: {e}")
         logger.error(f"错误堆栈:\n{traceback.format_exc()}")
         return None
+
+
+def has_lora_artifacts(model_dir, logger):
+    """检测目录内是否存在 LoRA/PEFT 适配器痕迹。"""
+    indicator_files = [
+        "adapter_config.json",
+        "adapter_model.bin",
+        "adapter_model.safetensors",
+    ]
+    for fname in indicator_files:
+        if os.path.exists(os.path.join(model_dir, fname)):
+            logger.warning(f"检测到 LoRA 适配器文件: {fname}")
+            return True
+
+    # 轻量扫描权重分片文件名，避免误将 LoRA 参数送入 h5 转换脚本
+    patterns = [
+        "pytorch_model*.bin",
+        "model*.safetensors",
+    ]
+    lora_key_re = re.compile(r"lora_[AB](?:\.|$)")
+    for pat in patterns:
+        for path in glob.glob(os.path.join(model_dir, pat)):
+            name = os.path.basename(path).lower()
+            if "adapter" in name:
+                logger.warning(f"检测到适配器权重文件: {path}")
+                return True
+            # 文件名不一定能看出是否含 lora key，这里只做最低成本兜底
+            if lora_key_re.search(name):
+                logger.warning(f"检测到可疑 LoRA 权重文件: {path}")
+                return True
+    return False
 
 
 def main():
@@ -200,8 +232,16 @@ def main():
     except Exception as e:
         logger.warning(f"合并后的权重文件无法加载（{model_bin}），后续转换很可能失败。错误: {e}")
 
-    # 选择转换脚本路径
-    if args.use_h5_to_ggml:
+    # 选择转换脚本路径。若检测到 LoRA 痕迹，强制使用 PT 转换，避免 h5 脚本 KeyError。
+    prefer_h5 = args.use_h5_to_ggml
+    if prefer_h5 and has_lora_artifacts(model_dir, logger):
+        logger.warning(
+            "检测到 LoRA/PEFT 适配器痕迹，convert-h5-to-ggml.py 无法处理 lora_A/lora_B 键；"
+            "自动切换为 convert-pt-to-ggml.py（基于合并后的 pytorch_model.bin）。"
+        )
+        prefer_h5 = False
+
+    if prefer_h5:
         script = os.path.join(repo_dir, "models", "convert-h5-to-ggml.py")
         if not os.path.exists(script):
             logger.error(f"未找到 H5 转换脚本: {script}")
@@ -214,7 +254,7 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
     # 构造命令行：将 hf_repo 作为第二参数传递给转换脚本
-    if args.use_h5_to_ggml:
+    if prefer_h5:
         cmd = [sys.executable, script, model_dir, hf_repo, args.output_dir]
     else:
         cmd = [sys.executable, script, model_bin, hf_repo, args.output_dir]

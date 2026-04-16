@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+from pathlib import Path
 
 import numpy as np
 import soundfile as sf
@@ -31,6 +32,36 @@ def vad_collector(sample_rate, frame_duration_ms, vad, frames):
     return segments
 
 
+def _convert_to_wav_16k_mono(input_path, output_dir, sample_rate):
+    """若输入不是 wav 或采样率不匹配，则转换为 16k 单声道 wav。"""
+    data, sr = sf.read(input_path, dtype="float32")
+    if getattr(data, "ndim", 1) > 1:
+        data = data.mean(axis=1)
+
+    suffix = Path(input_path).suffix.lower()
+    needs_convert = suffix != ".wav" or sr != sample_rate
+    if not needs_convert:
+        # 保持与后续 VAD 一致的 int16 格式
+        return input_path, data.astype(np.float32), sr
+
+    # 线性重采样到目标采样率
+    if sr != sample_rate:
+        target_len = int(len(data) * sample_rate / sr)
+        target_len = max(target_len, 1)
+        data = np.interp(
+            np.linspace(0, len(data), target_len, endpoint=False),
+            np.arange(len(data)),
+            data,
+        ).astype(np.float32)
+
+    converted_dir = os.path.join(output_dir, "_normalized")
+    os.makedirs(converted_dir, exist_ok=True)
+    converted_name = f"{Path(input_path).stem}_16k.wav"
+    converted_path = os.path.join(converted_dir, converted_name)
+    sf.write(converted_path, data, sample_rate, subtype="PCM_16")
+    return converted_path, data, sample_rate
+
+
 def vad_split(
     input_path,
     output_dir,
@@ -41,16 +72,14 @@ def vad_split(
     merge_threshold=15,
 ):
     """Split audio from input_path into segments using VAD and save to output_dir."""
-    data, sr = sf.read(input_path, dtype="int16")
-    if sr != sample_rate:
-        raise ValueError(
-            f"Sampling rate {sr} does not match expected {sample_rate}"
-        )
+    normalized_path, float_data, sr = _convert_to_wav_16k_mono(
+        input_path, output_dir, sample_rate
+    )
+    int16_data = np.clip(float_data, -1.0, 1.0)
+    data = (int16_data * np.iinfo(np.int16).max).astype(np.int16)
     raw_audio = data.tobytes()
     vad = webrtcvad.Vad(vad_aggressiveness)
     # 为每个输入文件创建独立子目录
-    from pathlib import Path
-
     base = Path(input_path).stem
     out_dir = os.path.join(output_dir, base)
     os.makedirs(out_dir, exist_ok=True)
