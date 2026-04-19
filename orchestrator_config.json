@@ -2,7 +2,7 @@
   "paths": {
     "raw_audio_dir": "",
     "split_script": "",
-    "audio_dir": "/home/cirno/recognizer_server/speaker_separator_env/out-speakers-jovo/",
+    "audio_dir": "",
     "labels_dir": "labels",
     "manifest_dir": "manifests",
     "model_dir": "out/model",
@@ -45,7 +45,8 @@
     "skip_manifest": true,
     "test_size": 0,
     "annotation_ratio": 0.0,
-    
+    "stop_after_manifests": false
+
   },
   "speakers": {
     

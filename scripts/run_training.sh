@@ -32,5 +32,5 @@ python orchestrator.py \
     "iteration.test_size=0" \
     "iteration.annotation_ratio=0.0" \
     "iteration.skip_manifest=false" \
-    "iteration.stop_after_labels=false"
+    "iteration.stop_after_manifests=false"
 

@@ -94,7 +94,7 @@
     // 跳过清单构建
     "skip_manifest": false,
     // 标注后即退出
-    "stop_after_labels": false
+    "stop_after_manifests": false
   },
 
   // 日志配置

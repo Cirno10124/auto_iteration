@@ -88,7 +88,10 @@ def run_orchestrator_loop(
     test_size = iteration.get("test_size", 0)
     annotation_ratio = iteration.get("annotation_ratio", 0.0)
     skip_manifest = iteration.get("skip_manifest", False)
-    stop_after_labels = iteration.get("stop_after_labels", False)
+    stop_after_manifests = bool(
+        iteration.get("stop_after_manifests")
+        or iteration.get("stop_after_labels")
+    )
     skip_labeling = iteration.get("skip_labeling", False)
     retry_split = int(iteration.get("retry_split", 1) or 1)
     retry_label = int(iteration.get("retry_label", 1) or 1)
@@ -272,12 +275,18 @@ def run_orchestrator_loop(
                             str(temperature),
                         ],
                         model_hint=short_model_hint(labeling_model),
+                        capture_output=False,
                         retries=retry_label,
                         on_failure="raise",
                     )
 
                 if skip_manifest:
                     logger.info("已启用 skip_manifest，跳过清单构建。")
+                    if stop_after_manifests:
+                        logger.warning(
+                            "已启用 stop_after_manifests 但 skip_manifest=true，"
+                            "本轮未重新构建清单，忽略提前退出。"
+                        )
                 else:
                     _run_step_with_policy(
                         logger=logger,
@@ -332,6 +341,12 @@ def run_orchestrator_loop(
                             f"已删除检查点目录 {checkpoint_dir}，本轮训练将从头开始"
                         )
 
+                    if stop_after_manifests:
+                        logger.info(
+                            "已启用 stop_after_manifests，train/val/test 清单分割完成后退出流程。"
+                        )
+                        sys.exit(0)
+
                 if annotation_ratio > 0:
                     anno_labels = labels_dir + "_annotation"
                     anno_audio = audio_dir + "_annotation"
@@ -383,10 +398,6 @@ def run_orchestrator_loop(
                         logger.info(
                             f"已抽取 {n} 条文件到人工标注目录: {anno_labels}, {anno_audio}"
                         )
-
-                if stop_after_labels:
-                    logger.info("已启用 stop_after_labels，流程结束。")
-                    sys.exit(0)
 
                 if test_size > 0:
                     logger.info(

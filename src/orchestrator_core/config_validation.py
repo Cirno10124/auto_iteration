@@ -89,8 +89,16 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
         errors.append("iteration.once 必须是布尔值")
     if not isinstance(iteration.get("skip_manifest"), bool):
         errors.append("iteration.skip_manifest 必须是布尔值")
-    if not isinstance(iteration.get("stop_after_labels"), bool):
-        errors.append("iteration.stop_after_labels 必须是布尔值")
+    if "stop_after_manifests" in iteration and not isinstance(
+        iteration.get("stop_after_manifests"), bool
+    ):
+        errors.append("iteration.stop_after_manifests 必须是布尔值")
+    if "stop_after_labels" in iteration and not isinstance(
+        iteration.get("stop_after_labels"), bool
+    ):
+        errors.append(
+            "iteration.stop_after_labels 必须是布尔值（已废弃，请改用 stop_after_manifests）"
+        )
     if not isinstance(iteration.get("skip_labeling"), bool):
         errors.append("iteration.skip_labeling 必须是布尔值")
     if not _is_number(iteration.get("annotation_ratio")) or not (

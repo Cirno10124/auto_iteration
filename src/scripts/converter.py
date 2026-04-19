@@ -10,6 +10,9 @@ import sys
 from datetime import datetime
 
 
+COPIED_MODEL_BIN_MARKER = ".converter_copied_model_bin"
+
+
 def setup_logging():
     """设置日志系统"""
     logging.basicConfig(
@@ -85,6 +88,50 @@ def has_lora_artifacts(model_dir, logger):
                 logger.warning(f"检测到可疑 LoRA 权重文件: {path}")
                 return True
     return False
+
+
+def cleanup_stale_copied_model_bin(model_dir, logger):
+    """清理上次转换遗留的复制权重文件。"""
+    marker_path = os.path.join(model_dir, COPIED_MODEL_BIN_MARKER)
+    copied_model_bin = os.path.join(model_dir, "pytorch_model.bin")
+    if os.path.exists(marker_path):
+        if os.path.exists(copied_model_bin):
+            try:
+                os.remove(copied_model_bin)
+                logger.info(f"清理遗留复制权重文件: {copied_model_bin}")
+            except Exception as e:
+                logger.warning(f"清理遗留复制权重文件失败 {copied_model_bin}: {e}")
+        try:
+            os.remove(marker_path)
+        except Exception as e:
+            logger.warning(f"清理遗留 marker 失败 {marker_path}: {e}")
+
+
+def mark_copied_model_bin(model_dir, logger):
+    marker_path = os.path.join(model_dir, COPIED_MODEL_BIN_MARKER)
+    try:
+        with open(marker_path, "w", encoding="utf-8") as f:
+            f.write("generated_by_converter_copy\n")
+    except Exception as e:
+        logger.warning(f"写入复制权重 marker 失败 {marker_path}: {e}")
+
+
+def cleanup_copied_model_bin_after_convert(model_dir, logger):
+    """转换结束后清理本次或历史复制出来的多余权重文件。"""
+    marker_path = os.path.join(model_dir, COPIED_MODEL_BIN_MARKER)
+    copied_model_bin = os.path.join(model_dir, "pytorch_model.bin")
+    if not os.path.exists(marker_path):
+        return
+    if os.path.exists(copied_model_bin):
+        try:
+            os.remove(copied_model_bin)
+            logger.info(f"转换后清理复制权重文件: {copied_model_bin}")
+        except Exception as e:
+            logger.warning(f"转换后清理复制权重文件失败 {copied_model_bin}: {e}")
+    try:
+        os.remove(marker_path)
+    except Exception as e:
+        logger.warning(f"转换后清理 marker 失败 {marker_path}: {e}")
 
 
 def main():
@@ -175,6 +222,9 @@ def main():
         logger.error(f"模型目录不存在: {args.model_dir}")
         sys.exit(1)
 
+    # 若存在上次遗留的复制权重文件，先清理，再从本次输出权重重新转换
+    cleanup_stale_copied_model_bin(model_dir, logger)
+
     # 备份需要删除或修改的文件
     files_to_backup = [
         "model.safetensors",
@@ -209,6 +259,7 @@ def main():
                 # 选最像主权重的那个
                 cand.sort()
                 shutil.copy2(cand[0], model_bin)
+                mark_copied_model_bin(model_dir, logger)
             else:
                 # 最后兜底：直接 state_dict 导出
                 import torch
@@ -262,62 +313,66 @@ def main():
         cmd.append("f32")
 
     logger.info(f'运行转换命令: {" ".join(cmd)}')
-    # 调用 whisper.cpp 转换脚本，捕获 stderr 以识别常见错误
-    result = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    if result.returncode == 0:
-        logger.info(f"转换完成，GGML 模型输出至 {args.output_dir}")
-        if backup_dir:
-            logger.info(f"原始模型文件已备份到: {backup_dir}")
-    else:
-        out = result.stdout.decode(errors="ignore")
-        err = result.stderr.decode(errors="ignore")
-        logger.warning(
-            f"convert-h5-to-ggml.py 脚本失败，错误代码 {result.returncode}，尝试回退到 convert-pt-to-ggml.py"
+    try:
+        # 调用 whisper.cpp 转换脚本，捕获 stderr 以识别常见错误
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-        if out.strip():
-            logger.debug(f"stdout:\n{out}")
-        if err.strip():
-            logger.debug(f"stderr:\n{err}")
-        # 回退到 convert-pt-to-ggml.py
-        fallback_script = os.path.join(
-            repo_dir, "models", "convert-pt-to-ggml.py"
-        )
-        if not os.path.exists(fallback_script):
-            logger.error(f"缺少回退脚本: {fallback_script}")
-            sys.exit(1)
-        if not os.path.exists(model_bin):
-            logger.error(f"回退转换需要权重文件，但未找到 {model_bin}（请检查合并/保存步骤是否成功）")
-            sys.exit(1)
-        fallback_cmd = [
-            sys.executable,
-            fallback_script,
-            model_bin,
-            hf_repo,
-            args.output_dir,
-        ]
-        if args.use_f32:
-            fallback_cmd.append("f32")
-        logger.info(f"运行回退转换命令: {' '.join(fallback_cmd)}")
-        fallback_result = subprocess.run(
-            fallback_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        if fallback_result.returncode == 0:
-            logger.info(f"回退转换完成，GGML 模型输出至 {args.output_dir}")
+        if result.returncode == 0:
+            logger.info(f"转换完成，GGML 模型输出至 {args.output_dir}")
             if backup_dir:
                 logger.info(f"原始模型文件已备份到: {backup_dir}")
         else:
-            fout = fallback_result.stdout.decode(errors="ignore")
-            ferr = fallback_result.stderr.decode(errors="ignore")
-            logger.error(
-                f"回退转换失败: return code {fallback_result.returncode}"
+            out = result.stdout.decode(errors="ignore")
+            err = result.stderr.decode(errors="ignore")
+            logger.warning(
+                f"convert-h5-to-ggml.py 脚本失败，错误代码 {result.returncode}，尝试回退到 convert-pt-to-ggml.py"
             )
-            if fout.strip():
-                logger.error(f"stdout:\n{fout}")
-            if ferr.strip():
-                logger.error(f"stderr:\n{ferr}")
-            sys.exit(1)
+            if out.strip():
+                logger.debug(f"stdout:\n{out}")
+            if err.strip():
+                logger.debug(f"stderr:\n{err}")
+            # 回退到 convert-pt-to-ggml.py
+            fallback_script = os.path.join(
+                repo_dir, "models", "convert-pt-to-ggml.py"
+            )
+            if not os.path.exists(fallback_script):
+                logger.error(f"缺少回退脚本: {fallback_script}")
+                sys.exit(1)
+            if not os.path.exists(model_bin):
+                logger.error(f"回退转换需要权重文件，但未找到 {model_bin}（请检查合并/保存步骤是否成功）")
+                sys.exit(1)
+            fallback_cmd = [
+                sys.executable,
+                fallback_script,
+                model_bin,
+                hf_repo,
+                args.output_dir,
+            ]
+            if args.use_f32:
+                fallback_cmd.append("f32")
+            logger.info(f"运行回退转换命令: {' '.join(fallback_cmd)}")
+            fallback_result = subprocess.run(
+                fallback_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            if fallback_result.returncode == 0:
+                logger.info(f"回退转换完成，GGML 模型输出至 {args.output_dir}")
+                if backup_dir:
+                    logger.info(f"原始模型文件已备份到: {backup_dir}")
+            else:
+                fout = fallback_result.stdout.decode(errors="ignore")
+                ferr = fallback_result.stderr.decode(errors="ignore")
+                logger.error(
+                    f"回退转换失败: return code {fallback_result.returncode}"
+                )
+                if fout.strip():
+                    logger.error(f"stdout:\n{fout}")
+                if ferr.strip():
+                    logger.error(f"stderr:\n{ferr}")
+                sys.exit(1)
+    finally:
+        # 转换结束后移除复制出来的多余权重文件，避免影响后续迭代
+        cleanup_copied_model_bin_after_convert(model_dir, logger)
 
     logger.info("=" * 60)
     logger.info("模型转换完成")

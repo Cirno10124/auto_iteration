@@ -2,20 +2,45 @@
 import argparse
 import logging
 import os
+import sys
 import traceback
+from typing import List
 
 import torch
 from transformers import pipeline
 
 
 def setup_logging():
-    """设置日志系统"""
+    """控制台仅保留 WARNING 及以上，详细过程用 debug（需设置环境或调低级别查看）。"""
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.WARNING,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    for name in ("transformers", "datasets", "torch", "httpx", "urllib3"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     return logging.getLogger(__name__)
+
+
+def _print_progress(current: int, total: int) -> None:
+    """控制台单行进度（不换行，用 \\r 刷新）。"""
+    if total <= 0:
+        return
+    sys.stdout.write(f"\r标注进度 {current}/{total}")
+    sys.stdout.flush()
+
+
+def _collect_audio_paths(audio_dir: str, max_samples: int) -> List[str]:
+    """按 os.walk 顺序收集待标注音频路径；max_samples>0 时最多收集该数量。"""
+    paths: List[str] = []
+    for root, _, files in os.walk(audio_dir):
+        for fname in files:
+            if not fname.lower().endswith((".wav", ".flac", ".mp3")):
+                continue
+            paths.append(os.path.join(root, fname))
+            if max_samples > 0 and len(paths) >= max_samples:
+                return paths
+    return paths
 
 
 def main():
@@ -83,16 +108,14 @@ def main():
 
     os.makedirs(args.labels_dir, exist_ok=True)
 
-    logger.info("=" * 60)
-    logger.info("Whisper 自动标注开始")
-    logger.info("=" * 60)
-    logger.info(f"音频目录: {args.audio_dir}")
-    logger.info(f"标签目录: {args.labels_dir}")
-    logger.info(f"使用模型: {args.model_name_or_path}")
-    logger.info(
+    logger.debug("=" * 60)
+    logger.debug("Whisper 自动标注开始")
+    logger.debug(f"音频目录: {args.audio_dir}")
+    logger.debug(f"标签目录: {args.labels_dir}")
+    logger.debug(f"使用模型: {args.model_name_or_path}")
+    logger.debug(
         f"设备: {'CPU' if args.device == -1 else f'GPU {args.device}'}"
     )
-    logger.info("=" * 60)
 
     # 防止 temperature 为 None 导致生成过程报错，需指定温度值
     generate_kwargs = {
@@ -101,10 +124,10 @@ def main():
         "logprob_threshold": args.logprob_threshold,
         "temperature": args.temperature,
     }
-    logger.info(f"生成参数: {generate_kwargs}")
+    logger.debug(f"生成参数: {generate_kwargs}")
 
     try:
-        logger.info("正在加载模型...")
+        logger.debug("正在加载模型...")
         asr = pipeline(
             "automatic-speech-recognition",
             model=args.model_name_or_path,
@@ -113,89 +136,82 @@ def main():
             return_timestamps=False,
             generate_kwargs=generate_kwargs,
         )
-        logger.info("模型加载完成")
+        logger.debug("模型加载完成")
     except Exception as e:
         logger.error(f"模型加载失败: {e}")
         logger.error(f"错误堆栈:\n{traceback.format_exc()}")
         raise
 
-    # 递归扫描音频目录，处理嵌套子目录，支持测试模式下最多标注文件数
-    processed = 0
-    done = False
-    for root, _, files in os.walk(args.audio_dir):
-        for fname in files:
-            if not fname.lower().endswith((".wav", ".flac", ".mp3")):
-                continue
-            # 测试模式限制：若已达到最大数量，退出循环
-            processed += 1
-            if args.max_samples > 0 and processed > args.max_samples:
-                logger.info(f"已达到最大标注数量 {args.max_samples}，退出标注")
-                done = True
-                break
-            rel_dir = os.path.relpath(root, args.audio_dir)
-            base = os.path.splitext(fname)[0]
-            audio_path = os.path.join(root, fname)
-            # 在 labels_dir 下保持相同子目录结构
-            out_dir = os.path.join(args.labels_dir, rel_dir)
-            os.makedirs(out_dir, exist_ok=True)
-            label_path = os.path.join(out_dir, base + ".txt")
-            # 检查是否已存在非空标注文件（仅限文件，排除目录）
-            if os.path.isfile(label_path):
-                try:
-                    size = os.path.getsize(label_path)
-                except Exception as e:
-                    logger.warning(f"检查标注文件大小失败: {label_path}, 错误: {e}")
-                    size = 0
-                if size and size > 0:
-                    logger.debug(f"跳过已存在标注: {label_path}")
-                    continue
-            logger.info(f"处理: {audio_path}")
+    audio_paths = _collect_audio_paths(args.audio_dir, args.max_samples)
+    total = len(audio_paths)
+    if args.max_samples > 0 and total >= args.max_samples:
+        logger.debug(
+            f"已达到最大标注数量上限 {args.max_samples}（本批共 {total} 个文件）"
+        )
+
+    for idx, audio_path in enumerate(audio_paths, start=1):
+        root = os.path.dirname(audio_path)
+        rel_dir = os.path.relpath(root, args.audio_dir)
+        base = os.path.splitext(os.path.basename(audio_path))[0]
+        # 在 labels_dir 下保持相同子目录结构
+        out_dir = os.path.join(args.labels_dir, rel_dir)
+        os.makedirs(out_dir, exist_ok=True)
+        label_path = os.path.join(out_dir, base + ".txt")
+        _print_progress(idx, total)
+        # 检查是否已存在非空标注文件（仅限文件，排除目录）
+        if os.path.isfile(label_path):
             try:
-                result = asr(audio_path)
-                # 置信度过滤
-                # 处理可能为 None 的置信度值
-                cr_val = result.get("compression_ratio")
-                cr = float(cr_val) if cr_val is not None else 0.0
-                lp_val = result.get("avg_logprob")
-                if lp_val is None:
-                    lp_val = result.get("logprob")
-                lp = float(lp_val) if lp_val is not None else 0.0
-                try:
-                    if (
-                        cr > args.compression_ratio_threshold
-                        or lp < args.logprob_threshold
-                    ):
-                        logger.warning(
-                            f"低置信度，跳过: cr={cr:.2f}, lp={lp:.2f}, 文件: {audio_path}"
-                        )
-                        continue
-                except TypeError as e:
-                    # 记录错误日志，跳过置信度过滤
-                    logger.warning(
-                        f"置信度比较出错，跳过过滤: cr={cr}, lp={lp}, error={e}, 文件: {audio_path}"
+                size = os.path.getsize(label_path)
+            except Exception as e:
+                logger.warning(f"检查标注文件大小失败: {label_path}, 错误: {e}")
+                size = 0
+            if size and size > 0:
+                logger.debug(f"跳过已存在标注: {label_path} | {audio_path}")
+                continue
+        try:
+            result = asr(audio_path)
+            # 置信度过滤
+            # 处理可能为 None 的置信度值
+            cr_val = result.get("compression_ratio")
+            cr = float(cr_val) if cr_val is not None else 0.0
+            lp_val = result.get("avg_logprob")
+            if lp_val is None:
+                lp_val = result.get("logprob")
+            lp = float(lp_val) if lp_val is not None else 0.0
+            try:
+                if (
+                    cr > args.compression_ratio_threshold
+                    or lp < args.logprob_threshold
+                ):
+                    logger.debug(
+                        f"低置信度，跳过: cr={cr:.2f}, lp={lp:.2f}, 文件: {audio_path}"
                     )
-                    logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
-                # 继续进行文本提取
-                text = result.get("text", "").strip()
-            except Exception as e:
-                logger.error(f"标注失败: {audio_path}, 错误: {e}")
-                logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
-                continue
+                    continue
+            except TypeError as e:
+                logger.debug(
+                    f"置信度比较出错，跳过过滤: cr={cr}, lp={lp}, error={e}, 文件: {audio_path}"
+                )
+                logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
+            # 继续进行文本提取
+            text = result.get("text", "").strip()
+        except Exception as e:
+            logger.error(f"标注失败: {audio_path}, 错误: {e}")
+            logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
+            continue
 
-            try:
-                with open(label_path, "w", encoding="utf-8") as f:
-                    f.write(text + "\n")
-                logger.info(f"写入标注: {label_path}")
-            except Exception as e:
-                logger.error(f"写入标注文件失败: {label_path}, 错误: {e}")
-                logger.error(f"错误堆栈:\n{traceback.format_exc()}")
-                continue
-        if done:
-            break
+        try:
+            with open(label_path, "w", encoding="utf-8") as f:
+                f.write(text + "\n")
+            logger.debug(f"写入标注: {label_path}")
+        except Exception as e:
+            logger.error(f"写入标注文件失败: {label_path}, 错误: {e}")
+            logger.error(f"错误堆栈:\n{traceback.format_exc()}")
+            continue
 
-    logger.info("=" * 60)
-    logger.info(f"标注完成，共处理 {processed} 个音频文件")
-    logger.info("=" * 60)
+    if total > 0:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    logger.debug(f"标注完成，本批共 {total} 个音频文件")
 
 
 if __name__ == "__main__":

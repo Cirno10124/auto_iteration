@@ -525,12 +525,13 @@ app.use(
 );
 
 const port = config.serverPort || 3100;
+const host = config.serverHost ?? "0.0.0.0";
 
 let serverInstance = null;
 if (require.main === module) {
-  serverInstance = app.listen(port, () => {
+  serverInstance = app.listen(port, host, () => {
     console.log(
-      `Annotation tool server listening on http://localhost:${port}`
+      `Annotation tool server listening on http://${host}:${port}`
     );
   });
 }
@@ -539,7 +540,7 @@ module.exports = {
   app,
   listen: (p = port, cb) => {
     if (serverInstance) return serverInstance;
-    serverInstance = app.listen(p, cb);
+    serverInstance = app.listen(p, host, cb);
     return serverInstance;
   },
 };

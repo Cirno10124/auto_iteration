@@ -29,5 +29,5 @@ python orchestrator.py \
     "paths.manifest_dir=$MANIFEST_DIR" \
     "iteration.annotation_ratio=$ANNOTATION_RATIO" \
     "iteration.skip_manifest=true" \
-    "iteration.stop_after_labels=true" \
+    "iteration.stop_after_manifests=true" \
     "iteration.once=true"

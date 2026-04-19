@@ -67,14 +67,14 @@ def test_normalize_config_types_iteration_bool_strings():
         "iteration": {
             "once": "false",
             "skip_manifest": "1",
-            "stop_after_labels": "0",
+            "stop_after_manifests": "0",
             "skip_labeling": "true",
         }
     }
     normalize_config_types(cfg)
     assert cfg["iteration"]["once"] is False
     assert cfg["iteration"]["skip_manifest"] is True
-    assert cfg["iteration"]["stop_after_labels"] is False
+    assert cfg["iteration"]["stop_after_manifests"] is False
     assert cfg["iteration"]["skip_labeling"] is True
 
 

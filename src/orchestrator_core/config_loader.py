@@ -200,7 +200,13 @@ def normalize_config_types(config: Dict[str, Any], logger: Any = None) -> None:
     if not isinstance(iteration, dict):
         return
 
-    bool_keys = ["once", "skip_manifest", "stop_after_labels", "skip_labeling"]
+    bool_keys = [
+        "once",
+        "skip_manifest",
+        "stop_after_manifests",
+        "stop_after_labels",
+        "skip_labeling",
+    ]
     changed_keys = []
     for key in bool_keys:
         if key not in iteration:

@@ -53,7 +53,7 @@
     "skip_manifest": false,
     "test_size": 0,
     "annotation_ratio": 0.0,
-    "stop_after_labels": false
+    "stop_after_manifests": false
   },
   "speakers": {},
   "logging": {

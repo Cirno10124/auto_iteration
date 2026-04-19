@@ -3,6 +3,7 @@
   "audioRoot": "./data/audio",
   "tasksFile": "./data/tasks.json",
   "annotationsFile": "./data/annotations.json",
+  "serverHost": "0.0.0.0",
   "serverPort": 3100,
   "forwardSeconds": 3,
   "backwardSeconds": 3,
