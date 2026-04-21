@@ -11,9 +11,46 @@ const rootDir = path.resolve(__dirname, "..");
 const configPath = path.join(rootDir, "annotation_tool.config.json");
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
+function findRepoRoot(startDir) {
+  let current = path.resolve(startDir);
+  while (true) {
+    if (fs.existsSync(path.join(current, ".git"))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return startDir;
+    }
+    current = parent;
+  }
+}
+
+const repoRoot = findRepoRoot(rootDir);
+
+function resolveFromConfigPath(configValue, fallbackValue) {
+  const rawValue = (configValue || fallbackValue || "").toString().trim();
+  if (!rawValue) {
+    return path.resolve(rootDir, fallbackValue || ".");
+  }
+  if (path.isAbsolute(rawValue)) {
+    return rawValue;
+  }
+
+  // 兼容历史行为（相对 annotation_server 目录）与新需求（相对仓库根目录）。
+  const byConfigDir = path.resolve(rootDir, rawValue);
+  if (fs.existsSync(byConfigDir)) {
+    return byConfigDir;
+  }
+  return path.resolve(repoRoot, rawValue);
+}
+
 const dataDir = path.resolve(rootDir, "data");
-const tasksFile = path.resolve(rootDir, config.tasksFile || "./data/tasks.json");
-const annotationsFile = path.resolve(rootDir, config.annotationsFile || "./data/annotations.json");
+const tasksFile = resolveFromConfigPath(config.tasksFile, "./data/tasks.json");
+const annotationsFile = resolveFromConfigPath(
+  config.annotationsFile,
+  "./data/annotations.json"
+);
+const audioRoot = resolveFromConfigPath(config.audioRoot, "./data/audio");
 
 function loadJson(filePath, fallback) {
   try {
@@ -84,7 +121,7 @@ function enrichTasksWithStatus(tasks, annotations) {
 
 app.use(
   "/audio",
-  express.static(path.resolve(rootDir, config.audioRoot || "./data/audio"), {
+  express.static(audioRoot, {
     fallthrough: true,
   })
 );
@@ -102,7 +139,6 @@ app.get("/api/audio/:taskId", (req, res) => {
     candidatePaths.push(task.originalPath.trim());
   }
   if (typeof task.audioPath === "string" && task.audioPath.trim()) {
-    const audioRoot = path.resolve(rootDir, config.audioRoot || "./data/audio");
     candidatePaths.push(path.join(audioRoot, task.audioPath.trim()));
   }
 
