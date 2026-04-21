@@ -99,10 +99,18 @@ def main():
         default=None,
         help="测试模式下最大标注音频数，不提供则默认100，<=0 则不限制",
     )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=8,
+        help="批处理大小，建议在GPU上设置为>=2以提升吞吐",
+    )
     args = parser.parse_args()
     # 未提供 max_samples 时，默认限制为100条
     if args.max_samples is None:
         args.max_samples = 100
+    if args.batch_size <= 0:
+        args.batch_size = 1
 
     logger = setup_logging()
 
@@ -149,16 +157,15 @@ def main():
             f"已达到最大标注数量上限 {args.max_samples}（本批共 {total} 个文件）"
         )
 
+    # 预处理输出路径并跳过已有标注，剩余任务按 batch 调用 pipeline
+    pending: List[tuple[str, str, int]] = []
     for idx, audio_path in enumerate(audio_paths, start=1):
         root = os.path.dirname(audio_path)
         rel_dir = os.path.relpath(root, args.audio_dir)
         base = os.path.splitext(os.path.basename(audio_path))[0]
-        # 在 labels_dir 下保持相同子目录结构
         out_dir = os.path.join(args.labels_dir, rel_dir)
         os.makedirs(out_dir, exist_ok=True)
         label_path = os.path.join(out_dir, base + ".txt")
-        _print_progress(idx, total)
-        # 检查是否已存在非空标注文件（仅限文件，排除目录）
         if os.path.isfile(label_path):
             try:
                 size = os.path.getsize(label_path)
@@ -167,46 +174,61 @@ def main():
                 size = 0
             if size and size > 0:
                 logger.debug(f"跳过已存在标注: {label_path} | {audio_path}")
+                _print_progress(idx, total)
                 continue
+        pending.append((audio_path, label_path, idx))
+
+    for start in range(0, len(pending), args.batch_size):
+        batch = pending[start : start + args.batch_size]
+        batch_audio_paths = [item[0] for item in batch]
         try:
-            result = asr(audio_path)
-            # 置信度过滤
-            # 处理可能为 None 的置信度值
-            cr_val = result.get("compression_ratio")
-            cr = float(cr_val) if cr_val is not None else 0.0
-            lp_val = result.get("avg_logprob")
-            if lp_val is None:
-                lp_val = result.get("logprob")
-            lp = float(lp_val) if lp_val is not None else 0.0
-            try:
-                if (
-                    cr > args.compression_ratio_threshold
-                    or lp < args.logprob_threshold
-                ):
-                    logger.debug(
-                        f"低置信度，跳过: cr={cr:.2f}, lp={lp:.2f}, 文件: {audio_path}"
-                    )
-                    continue
-            except TypeError as e:
-                logger.debug(
-                    f"置信度比较出错，跳过过滤: cr={cr}, lp={lp}, error={e}, 文件: {audio_path}"
-                )
-                logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
-            # 继续进行文本提取
-            text = result.get("text", "").strip()
+            batch_results = asr(batch_audio_paths, batch_size=args.batch_size)
+            if isinstance(batch_results, dict):
+                batch_results = [batch_results]
         except Exception as e:
-            logger.error(f"标注失败: {audio_path}, 错误: {e}")
+            for audio_path, _, idx in batch:
+                _print_progress(idx, total)
+                logger.error(f"标注失败: {audio_path}, 错误: {e}")
             logger.error(f"完整错误堆栈:\n{traceback.format_exc()}")
             continue
 
-        try:
-            with open(label_path, "w", encoding="utf-8") as f:
-                f.write(text + "\n")
-            logger.debug(f"写入标注: {label_path}")
-        except Exception as e:
-            logger.error(f"写入标注文件失败: {label_path}, 错误: {e}")
-            logger.error(f"错误堆栈:\n{traceback.format_exc()}")
-            continue
+        for (audio_path, label_path, idx), result in zip(batch, batch_results):
+            _print_progress(idx, total)
+            try:
+                cr_val = result.get("compression_ratio")
+                cr = float(cr_val) if cr_val is not None else 0.0
+                lp_val = result.get("avg_logprob")
+                if lp_val is None:
+                    lp_val = result.get("logprob")
+                lp = float(lp_val) if lp_val is not None else 0.0
+                try:
+                    if (
+                        cr > args.compression_ratio_threshold
+                        or lp < args.logprob_threshold
+                    ):
+                        logger.debug(
+                            f"低置信度，跳过: cr={cr:.2f}, lp={lp:.2f}, 文件: {audio_path}"
+                        )
+                        continue
+                except TypeError as e:
+                    logger.debug(
+                        f"置信度比较出错，跳过过滤: cr={cr}, lp={lp}, error={e}, 文件: {audio_path}"
+                    )
+                    logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
+                text = result.get("text", "").strip()
+            except Exception as e:
+                logger.error(f"处理识别结果失败: {audio_path}, 错误: {e}")
+                logger.error(f"错误堆栈:\n{traceback.format_exc()}")
+                continue
+
+            try:
+                with open(label_path, "w", encoding="utf-8") as f:
+                    f.write(text + "\n")
+                logger.debug(f"写入标注: {label_path}")
+            except Exception as e:
+                logger.error(f"写入标注文件失败: {label_path}, 错误: {e}")
+                logger.error(f"错误堆栈:\n{traceback.format_exc()}")
+                continue
 
     if total > 0:
         sys.stdout.write("\n")
