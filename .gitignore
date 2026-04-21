@@ -16,6 +16,7 @@ __pycache__/
 *mp4
 .coverage
 coverage.xml
+orchestrator_config.*
 htmlcov/
 
 tests/logs/
@@ -26,4 +27,3 @@ tests/audio_chunks/
 tests/ggml_model/
 tests/test_audio/
 thchs30/
-orchestrator_config.json
