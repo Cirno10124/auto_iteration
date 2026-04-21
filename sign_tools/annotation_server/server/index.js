@@ -52,6 +52,19 @@ const annotationsFile = resolveFromConfigPath(
 );
 const audioRoot = resolveFromConfigPath(config.audioRoot, "./data/audio");
 
+function normalizeTaskRelativePath(value) {
+  const raw = (value || "").toString().trim();
+  if (!raw) return "";
+  return raw.replace(/^[\\/]+/, "");
+}
+
+function toCandidateAbsolutePaths(inputPath) {
+  const raw = (inputPath || "").toString().trim();
+  if (!raw) return [];
+  if (path.isAbsolute(raw)) return [raw];
+  return [path.resolve(rootDir, raw), path.resolve(repoRoot, raw)];
+}
+
 function loadJson(filePath, fallback) {
   try {
     if (!fs.existsSync(filePath)) {
@@ -136,13 +149,18 @@ app.get("/api/audio/:taskId", (req, res) => {
 
   const candidatePaths = [];
   if (typeof task.originalPath === "string" && task.originalPath.trim()) {
-    candidatePaths.push(task.originalPath.trim());
+    candidatePaths.push(...toCandidateAbsolutePaths(task.originalPath));
   }
   if (typeof task.audioPath === "string" && task.audioPath.trim()) {
-    candidatePaths.push(path.join(audioRoot, task.audioPath.trim()));
+    const relativeAudioPath = normalizeTaskRelativePath(task.audioPath);
+    if (relativeAudioPath) {
+      candidatePaths.push(path.join(audioRoot, relativeAudioPath));
+    }
   }
 
-  const existing = candidatePaths.find((p) => {
+  const uniqueCandidatePaths = [...new Set(candidatePaths)];
+
+  const existing = uniqueCandidatePaths.find((p) => {
     try {
       return fs.existsSync(p) && fs.statSync(p).isFile();
     } catch {
@@ -153,7 +171,7 @@ app.get("/api/audio/:taskId", (req, res) => {
   if (!existing) {
     return res.status(404).json({
       error: "Audio file not found",
-      tried: candidatePaths,
+      tried: uniqueCandidatePaths,
     });
   }
 
