@@ -27,3 +27,4 @@ tests/audio_chunks/
 tests/ggml_model/
 tests/test_audio/
 thchs30/
+sign_tools/annotation_server/annotation_tool.config.json
