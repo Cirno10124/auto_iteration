@@ -12,6 +12,12 @@ pytestmark = pytest.mark.integration_light
 
 class EndToEndTest(unittest.TestCase):
     @staticmethod
+    def _test_config_path(auto_iter_dir):
+        return os.path.join(
+            auto_iter_dir, "config_template", "orchestrator_config.test.json"
+        )
+
+    @staticmethod
     def _cleanup_outputs(tests_dir):
         for d in [
             os.path.join(tests_dir, "audio_chunks"),
@@ -38,7 +44,7 @@ class EndToEndTest(unittest.TestCase):
             sys.executable,
             os.path.join(auto_iter_dir, "orchestrator.py"),
             "--config",
-            os.path.join(auto_iter_dir, "orchestrator_config.json"),
+            self._test_config_path(auto_iter_dir),
             "--override",
             f"paths.raw_audio_dir={audio_dir}",
             f"paths.split_script={os.path.join(stubs_dir, 'split_audio_stub.py')}",
@@ -89,7 +95,7 @@ class EndToEndTest(unittest.TestCase):
             sys.executable,
             os.path.join(auto_iter_dir, "orchestrator.py"),
             "--config",
-            os.path.join(auto_iter_dir, "orchestrator_config.json"),
+            self._test_config_path(auto_iter_dir),
             # 传入一个不存在的 speaker_id，使 speakers_map 过滤为空，从而走单说话人(None)路径，
             # 避免模型/日志输出被分散到 tests/model/<speaker_id>/... 导致断言路径不稳定。
             "--speakers",

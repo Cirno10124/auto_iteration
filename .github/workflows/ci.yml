@@ -38,6 +38,9 @@ jobs:
     - name: Enforce source layout
       run: python src/scripts/check_source_layout.py
 
+    - name: Ensure tests use committed test config
+      run: rm -f orchestrator_config.json
+
     - name: Test with coverage
       run: |
         pytest -q \
