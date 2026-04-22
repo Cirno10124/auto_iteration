@@ -3,6 +3,7 @@
     tasks: [],
     currentIndex: 0,
     originalPseudoLabel: "",
+    tasksVersion: 0,
   };
 
   const statusFilterEl = document.getElementById("statusFilter");
@@ -221,7 +222,11 @@
       }</div>
     `;
 
-    const audioUrl = task.id ? `/api/audio/${encodeURIComponent(task.id)}` : "";
+    const audioUrl = task.id
+      ? `/api/audio/${encodeURIComponent(task.id)}?v=${encodeURIComponent(
+          String(state.tasksVersion)
+        )}`
+      : "";
     if (audioEl.src !== audioUrl) {
       audioEl.src = audioUrl;
       audioEl.currentTime = 0;
@@ -247,8 +252,13 @@
     const res = await fetch("/api/tasks");
     const data = await res.json();
     state.tasks = data.items || [];
+    state.tasksVersion += 1;
     if (!state.tasks.length) {
       progressTextEl.textContent = "暂无任务，请导入任务数据。";
+      audioEl.pause();
+      audioEl.removeAttribute("src");
+      audioEl.load();
+      updateTimeInfo();
       return;
     }
     renderTasks();
